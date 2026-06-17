@@ -1,0 +1,17 @@
+# Example KB used to exercise engrym end-to-end.
+[docs]
+root = "docs"
+
+[embedding]
+provider = "local"
+model    = "bge-small-en-v1.5"
+
+[search]
+rrf_k = 60
+
+[lint]
+strict = false
+
+[daemon]
+enabled   = true
+idle_secs = 300

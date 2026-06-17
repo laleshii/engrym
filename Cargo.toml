@@ -1,0 +1,39 @@
+[package]
+name = "engrym"
+version = "0.1.0"
+edition = "2021"
+description = "A fast, AI-first knowledge base layered over Markdown: typed relations, topic hierarchies, and hybrid search."
+license = "MIT"
+repository = "https://github.com/engrym/engrym"
+readme = "README.md"
+keywords = ["knowledge-base", "search", "markdown", "cli", "ai"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "engrym"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+toml = "0.8"
+pulldown-cmark = "0.11"
+walkdir = "2"
+sha2 = "0.10"
+anyhow = "1"
+regex = "1"
+fastembed = "5.17.2"
+libc = "0.2.186"
+
+[dev-dependencies]
+tempfile = "3"
+serde_json = "1"
+
+[profile.release]
+# Blazing-fast startup + small binary for a CLI.
+opt-level = 3
+lto = "thin"
+strip = true

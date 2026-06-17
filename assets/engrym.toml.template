@@ -1,0 +1,37 @@
+# engrym configuration — committed to the repo so conventions travel with it.
+# The index it builds lives in .engrym/ and is gitignored.
+
+[docs]
+# Where the Markdown knowledge base lives, relative to repo root.
+root = "docs"
+# File placement on disk (purely for human review — `id` is the identity):
+#   "flat"     → docs/<id>.md
+#   "topic"    → docs/<first-topic-path>/<id>.md   (mirrors the topic hierarchy)
+#   "altitude" → overviews (altitude 0) at the root; deeper docs in 1/ 2/ 3/
+# Use `engrym relocate` to convert an existing KB between layouts.
+layout = "altitude"
+
+[embedding]
+# Local by default: code/docs never leave the machine. The model downloads
+# once and is cached globally. Swap `provider` to "openai" / "voyage" (with an
+# api_key_env) only if you explicitly accept sending content to a third party.
+provider = "local"
+model    = "bge-small-en-v1.5"   # 384-dim ONNX, runs offline via fastembed
+# api_key_env = "OPENAI_API_KEY" # only used when provider != "local"
+
+[search]
+# Hybrid retrieval: keyword (BM25) + vector cosine fused with reciprocal rank.
+# k controls RRF smoothing; raise to favor consensus across both rankers.
+rrf_k = 60
+
+[lint]
+# Local runs warn; CI runs `engrym lint --strict` to fail the build.
+strict = false
+
+[daemon]
+# A warm embedding daemon is auto-spawned on the first semantic query (keeping
+# the model resident so queries drop from ~130ms to ~13ms) and self-terminates
+# after `idle_secs` of inactivity. Set enabled = false (or ENGRYM_NO_DAEMON=1)
+# to always embed in-process.
+enabled   = true
+idle_secs = 300

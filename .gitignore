@@ -1,0 +1,14 @@
+# Derived index — always rebuildable from the Markdown docs.
+.engrym/
+
+# Cached embedding models.
+.fastembed_cache/
+
+# Rust build output.
+/target
+
+# Installed agent skills are generated from assets/skills/ — not source.
+.claude/skills/
+
+# macOS cruft.
+.DS_Store

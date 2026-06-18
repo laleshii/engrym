@@ -3,6 +3,7 @@
 
 pub mod agents;
 pub mod author;
+pub mod browse;
 pub mod deinit;
 pub mod index;
 pub mod init;

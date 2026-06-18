@@ -532,6 +532,64 @@ fn reset_guards_against_docs_root_being_the_repo() {
 }
 
 // --------------------------------------------------------------------------
+// browse — local web server
+// --------------------------------------------------------------------------
+
+#[test]
+fn browse_serves_rendered_docs_with_connections() {
+    let ws = Workspace::new();
+    ws.seed(); // overview (alt 0) ← auth (alt 1, refines:overview)
+    ws.run(&["index", "--no-embed"]).ok();
+
+    // Pick a free port, then launch the server as a detached child.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let mut child = Command::new(BIN)
+        .args(["browse", "--port", &port.to_string()])
+        .current_dir(ws.repo())
+        .env("HOME", ws.home())
+        .env("ENGRYM_HOME", ws.home().join(".engrym"))
+        .env("ENGRYM_NO_DAEMON", "1")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("spawn browse");
+
+    let addr = format!("127.0.0.1:{port}");
+    let doc = http_get(&addr, "/doc/auth", 50);
+    let index = http_get(&addr, "/", 50);
+    let _ = child.kill();
+    let _ = child.wait();
+
+    // Rendered body + the graph panel (auth refines overview → outbound edge).
+    assert!(doc.contains("Sessions use OAuth"), "body not rendered:\n{doc}");
+    assert!(doc.contains("Outbound"), "outbound connections panel missing:\n{doc}");
+    assert!(doc.contains("/doc/overview"), "link to related doc missing");
+    // The index lists docs.
+    assert!(index.contains("Knowledge base") && index.contains("/doc/auth"), "{index}");
+}
+
+/// Minimal HTTP/1.0 GET (server closes the connection, so read to EOF), retried
+/// until the server is up.
+fn http_get(addr: &str, path: &str, attempts: u32) -> String {
+    use std::io::{Read, Write};
+    for _ in 0..attempts {
+        if let Ok(mut s) = std::net::TcpStream::connect(addr) {
+            let _ = s.write_all(format!("GET {path} HTTP/1.0\r\nHost: x\r\n\r\n").as_bytes());
+            let mut buf = String::new();
+            if s.read_to_string(&mut buf).is_ok() && !buf.is_empty() {
+                return buf;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    String::new()
+}
+
+// --------------------------------------------------------------------------
 // deinit — full removal (inverse of init)
 // --------------------------------------------------------------------------
 

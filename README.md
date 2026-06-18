@@ -9,6 +9,17 @@ and encode* what a repo knows — and plain enough for humans to review in a dif
 
 ## Install
 
+Needs a Rust toolchain. If you don't have one:
+
+```sh
+brew install rust                                                # macOS (Homebrew)
+# or, any platform, via rustup:
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # then: source "$HOME/.cargo/env"
+```
+
+Then build and link the binary (cargo pulls all deps, incl. bundled SQLite — no
+system libraries needed):
+
 ```sh
 cargo build --release                  # binary at target/release/engrym
 ./target/release/engrym install bin    # symlink onto PATH
@@ -23,6 +34,7 @@ engrym search "how does hybrid search work"   # hybrid keyword + semantic retrie
 engrym topic indexing                         # everything under a topic
 engrym related hybrid-search                  # typed graph neighborhood of a doc
 engrym show engrym-overview                   # print a document
+engrym browse               # read & navigate the KB in your browser
 engrym deinit               # remove engrym from the repo entirely (inverse of init)
 ```
 
@@ -45,6 +57,7 @@ is typed literally.
 | `engrym show <id>` | Print a document |
 | `engrym new <id> …` | Create a document (also `set`, `rm`, `relocate`) |
 | `engrym lint [--strict]` | Validate the frontmatter contract |
+| `engrym browse [--port <n>] [--open]` | Local web UI to read/navigate the KB |
 | `engrym serve [--stop]` | Warm embedding daemon (usually automatic) |
 | `engrym install <skills\|bin\|memory>` | Install agent skills, link the binary, or record the repo in agent memory |
 | `engrym uninstall <skills\|bin\|memory>` | Inverse of `install` |

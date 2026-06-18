@@ -128,6 +128,16 @@ enum Command {
         yes: bool,
     },
 
+    /// Serve a local web UI to read and navigate the KB.
+    Browse {
+        /// Port to bind on localhost (0 = pick a free one).
+        #[arg(long, default_value_t = 7345)]
+        port: u16,
+        /// Open the URL in your browser.
+        #[arg(long)]
+        open: bool,
+    },
+
     /// Move documents on disk to match the docs layout.
     Relocate {
         /// Only relocate this document (default: all).
@@ -353,6 +363,7 @@ fn run() -> Result<()> {
         | Command::Uninstall { .. }
         | Command::Deinit { .. } => unreachable!("handled above"),
         Command::Reset { yes } => commands::reset::run(&config, yes, cli.json),
+        Command::Browse { port, open } => commands::browse::run(&config, port, open),
         Command::Index { no_embed } => commands::index::run(&config, no_embed, cli.json),
         Command::Search {
             query,

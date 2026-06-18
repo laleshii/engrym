@@ -20,6 +20,9 @@ summary: 'The command surface: index, search, topic, related, show, lint, serve,
 - `index` — (re)build the index (`src/commands/index.rs`).
 - `search` — hybrid passage retrieval (see [[hybrid-search]]).
 - `topic` / `related` / `show` — navigate the graph.
+- `browse` — a local web server (`src/commands/browse.rs`) that renders docs as
+  HTML, rewrites `[[wikilinks]]` to links, and shows related / same-altitude /
+  same-topic panels. Server-rendered (no JS); only new dep is `tiny_http`.
 - `new` / `set` / `rm` — author documents (see [[authoring-commands]]).
 - `lint` — validate the frontmatter contract.
 - `serve` — the warm embedding daemon (see [[warm-daemon]]).

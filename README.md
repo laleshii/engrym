@@ -17,12 +17,18 @@ brew install rust                                                # macOS (Homebr
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # then: source "$HOME/.cargo/env"
 ```
 
-Then build and link the binary (cargo pulls all deps, incl. bundled SQLite — no
-system libraries needed):
+Then install from crates.io (cargo builds it and places `engrym` on your PATH;
+all deps, incl. bundled SQLite, are pulled in — no system libraries needed):
 
 ```sh
-cargo build --release                  # binary at target/release/engrym
-./target/release/engrym install bin    # symlink onto PATH
+cargo install engrym
+```
+
+Or build from a clone of this repo:
+
+```sh
+cargo install --path .     # builds + installs onto PATH
+# or just: cargo build --release   → binary at target/release/engrym
 ```
 
 ## Use
@@ -59,8 +65,8 @@ is typed literally.
 | `engrym lint [--strict]` | Validate the frontmatter contract |
 | `engrym browse [--port <n>] [--open]` | Local web UI to read/navigate the KB |
 | `engrym serve [--stop]` | Warm embedding daemon (usually automatic) |
-| `engrym install <skills\|bin\|memory>` | Install agent skills, link the binary, or record the repo in agent memory |
-| `engrym uninstall <skills\|bin\|memory>` | Inverse of `install` |
+| `engrym install <skills\|memory>` | Install agent skills, or record the repo in agent memory |
+| `engrym uninstall <skills\|memory>` | Inverse of `install` |
 | `engrym reset` | Delete the KB's documents + index (keeps config) |
 | `engrym deinit` | Remove engrym from the repo entirely (inverse of `init`) |
 

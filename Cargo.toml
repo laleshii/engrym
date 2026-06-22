@@ -1,13 +1,24 @@
 [package]
 name = "engrym"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
+authors = ["Rares S"]
 description = "A fast, AI-first knowledge base layered over Markdown: typed relations, topic hierarchies, and hybrid search."
 license = "MIT"
-repository = "https://github.com/engrym/engrym"
+repository = "https://github.com/laleshii/engrym"
 readme = "README.md"
 keywords = ["knowledge-base", "search", "markdown", "cli", "ai"]
 categories = ["command-line-utilities"]
+
+# Keep the published crate lean: docs, examples, and tests aren't needed to
+# build or run the binary. The embedded assets (skills, config template,
+# `spec/index-schema.sql`) are pulled in via `include_str!`, so they must stay.
+exclude = [
+    "docs/",
+    "examples/",
+    "tests/",
+    "spec/document-schema.md",
+]
 
 [[bin]]
 name = "engrym"

@@ -102,13 +102,13 @@ enum Command {
         force: bool,
     },
 
-    /// Install the agent skills, or link this binary onto your PATH.
+    /// Install the agent skills, or record this repo in an agent's memory.
     Install {
         #[command(subcommand)]
         target: InstallTarget,
     },
 
-    /// Remove the agent skills or the linked binary (inverse of `install`).
+    /// Remove the agent skills or memory entry (inverse of `install`).
     Uninstall {
         #[command(subcommand)]
         target: UninstallTarget,
@@ -248,16 +248,6 @@ enum InstallTarget {
         local: bool,
     },
 
-    /// Symlink (or `--copy`) this binary into a directory on your PATH.
-    Bin {
-        /// Target directory (default: ~/.local/bin, or ~/.cargo/bin if on PATH).
-        #[arg(long, value_name = "DIR")]
-        dir: Option<PathBuf>,
-        /// Copy the binary instead of symlinking it (a symlink tracks rebuilds).
-        #[arg(long)]
-        copy: bool,
-    },
-
     /// Record this repo in an agent's global memory (so it knows the repo has a KB).
     Memory {
         /// Agent whose memory to update (e.g. `claude`, `codex`); prompts if omitted.
@@ -276,13 +266,6 @@ enum UninstallTarget {
         /// Target the local-mode (repo-free) skill location.
         #[arg(long)]
         local: bool,
-    },
-
-    /// Remove the engrym binary linked onto PATH by `install bin`.
-    Bin {
-        /// Directory to remove it from (default: the `install bin` default).
-        #[arg(long, value_name = "DIR")]
-        dir: Option<PathBuf>,
     },
 
     /// Remove this repo from an agent's global memory (inverse of `install memory`).
@@ -309,7 +292,7 @@ fn run() -> Result<()> {
 
     // `init` and `install` run *before* a config exists, so they can't (and
     // needn't) discover one: `init` scaffolds it, `install` only touches an
-    // agent's skill dir or PATH.
+    // agent's skill dir or memory.
     if let Command::Init { agent, agent_cmd, local, docs, force } = cli.command {
         return commands::init::run(commands::init::InitArgs {
             root: start,
@@ -326,7 +309,6 @@ fn run() -> Result<()> {
             InstallTarget::Skills { agent, local } => {
                 commands::install::Target::Skills { agent, local }
             }
-            InstallTarget::Bin { dir, copy } => commands::install::Target::Bin { dir, copy },
             InstallTarget::Memory { agent } => commands::install::Target::Memory { agent },
         };
         return commands::install::run(commands::install::InstallArgs {
@@ -340,7 +322,6 @@ fn run() -> Result<()> {
             UninstallTarget::Skills { agent, local } => {
                 commands::uninstall::Target::Skills { agent, local }
             }
-            UninstallTarget::Bin { dir } => commands::uninstall::Target::Bin { dir },
             UninstallTarget::Memory { agent } => commands::uninstall::Target::Memory { agent },
         };
         return commands::uninstall::run(commands::uninstall::UninstallArgs {

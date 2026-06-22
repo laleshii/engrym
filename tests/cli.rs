@@ -340,33 +340,6 @@ fn install_skills_for_cli_only_agent_fails() {
     ws.run(&["install", "skills", "--agent", "gemini"]).fail().err_has("no engrym skill");
 }
 
-#[test]
-fn install_bin_symlinks_by_default() {
-    let ws = Workspace::new();
-    let bindir = ws.repo().join("bin");
-    let v = ws
-        .run(&["install", "bin", "--dir", bindir.to_str().unwrap(), "--json"])
-        .ok()
-        .json();
-    assert_eq!(v["method"], "linked");
-    let link = bindir.join("engrym");
-    assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-    assert!(link.exists(), "symlink should resolve to an existing binary"); // follows the link
-}
-
-#[test]
-fn install_bin_copy_makes_a_real_file() {
-    let ws = Workspace::new();
-    let bindir = ws.repo().join("bin");
-    let v = ws
-        .run(&["install", "bin", "--dir", bindir.to_str().unwrap(), "--copy", "--json"])
-        .ok()
-        .json();
-    assert_eq!(v["method"], "copied");
-    let file = bindir.join("engrym");
-    assert!(!file.symlink_metadata().unwrap().file_type().is_symlink());
-}
-
 // --------------------------------------------------------------------------
 // uninstall
 // --------------------------------------------------------------------------
@@ -382,41 +355,6 @@ fn uninstall_skills_removes_and_is_idempotent() {
     // Second time: nothing left to remove.
     let v = ws.run(&["uninstall", "skills", "--agent", "claude", "--json"]).ok().json();
     assert_eq!(v["removed"].as_array().unwrap().len(), 0);
-}
-
-#[test]
-fn uninstall_bin_removes_and_is_idempotent() {
-    let ws = Workspace::new();
-    let bindir = ws.repo().join("bin");
-    let dir = bindir.to_str().unwrap();
-    ws.run(&["install", "bin", "--dir", dir]).ok();
-    let v = ws.run(&["uninstall", "bin", "--dir", dir, "--json"]).ok().json();
-    assert_eq!(v["removed"], true);
-    assert!(!bindir.join("engrym").exists());
-
-    let v = ws.run(&["uninstall", "bin", "--dir", dir, "--json"]).ok().json();
-    assert_eq!(v["removed"], false);
-}
-
-#[test]
-fn uninstall_bin_refuses_to_delete_the_running_binary() {
-    let ws = Workspace::new();
-    let bindir = ws.repo().join("bin");
-    fs::create_dir_all(&bindir).unwrap();
-    let copy = bindir.join("engrym");
-    fs::copy(BIN, &copy).unwrap();
-
-    // Run the *copy*, aiming uninstall at its own directory: dest == the running
-    // binary, so it must refuse. (Using a copy keeps the real test binary safe
-    // even if the guard regresses.)
-    let out = Command::new(&copy)
-        .args(["uninstall", "bin", "--dir", bindir.to_str().unwrap()])
-        .env("HOME", ws.home())
-        .env("ENGRYM_NO_DAEMON", "1")
-        .output()
-        .unwrap();
-    assert_ne!(out.status.code(), Some(0), "guard should refuse to self-delete");
-    assert!(copy.exists(), "binary must survive a refused uninstall");
 }
 
 // --------------------------------------------------------------------------

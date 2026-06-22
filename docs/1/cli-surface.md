@@ -28,12 +28,10 @@ summary: 'The command surface: index, search, topic, related, show, lint, serve,
 - `serve` — the warm embedding daemon (see [[warm-daemon]]).
 - `init` — scaffold a repo and hand off to an agent (see [[init-and-skill]]);
   `--local` stores the KB outside the repo (see [[local-mode]]).
-- `install skills` / `install bin` — (re)install the agent skills on demand, or
-  link this binary onto PATH (see [[init-and-skill]]).
+- `install skills` / `uninstall skills` — (re)install or remove the agent skills
+  on demand (see [[init-and-skill]]).
 - `install memory` / `uninstall memory` — record (or remove) this repo in an
   agent's global memory file so it learns the repo has a KB (see [[local-mode]]).
-- `uninstall skills` / `uninstall bin` — the inverse of `install`: remove the
-  skills from an agent, or the linked binary from PATH.
 - `reset` — delete every document and the index (keeps `engrym.toml`); confirms
   unless `--yes`.
 - `deinit` — the inverse of `init`: remove engrym's whole per-repo footprint (KB,

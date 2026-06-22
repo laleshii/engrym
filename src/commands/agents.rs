@@ -287,24 +287,6 @@ pub fn remove_skills_for(agent: &KnownAgent, root: &Path, local: bool) -> Result
     Ok(removed)
 }
 
-/// A PATH directory to link engrym into (or remove it from). Prefer one already
-/// on PATH so the link is usable immediately; otherwise fall back to the
-/// conventional `~/.local/bin`.
-pub fn default_bin_dir() -> Result<PathBuf> {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .context("$HOME is not set; pass --dir to choose the engrym bin directory")?;
-    let local = home.join(".local/bin");
-    let cargo = home.join(".cargo/bin");
-    if dir_on_path(&local) {
-        return Ok(local);
-    }
-    if dir_on_path(&cargo) {
-        return Ok(cargo);
-    }
-    Ok(local)
-}
-
 fn skill_capable_bins() -> String {
     KNOWN_AGENTS
         .iter()
@@ -488,18 +470,6 @@ pub fn on_path(bin: &str) -> bool {
         return false;
     };
     std::env::split_paths(&paths).any(|dir| dir.join(bin).is_file())
-}
-
-/// Whether `dir` is one of the entries in `$PATH` (compared directly and via
-/// canonicalization, so symlinked PATH entries still match).
-pub fn dir_on_path(dir: &Path) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    let target = std::fs::canonicalize(dir).ok();
-    std::env::split_paths(&paths).any(|p| {
-        p == *dir || (target.is_some() && std::fs::canonicalize(&p).ok() == target)
-    })
 }
 
 pub fn prompt(message: &str, default: &str) -> Result<String> {

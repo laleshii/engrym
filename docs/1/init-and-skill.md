@@ -41,7 +41,6 @@ The agent catalogue and skill-writing logic live in `src/commands/agents.rs`,
 shared by `init` and `install`. `init` bundles skill installation into a
 one-time scaffold; `engrym install skills [--agent <bin>]` does *only* that step,
 so you can refresh the skill text after upgrading the CLI, or add it to a repo
-you scaffolded before picking an agent. A separate `engrym install bin` symlinks
-the running binary onto PATH — a symlink by default, so a local
-`cargo build --release` takes effect immediately. It is the deliberate
-replacement for `cargo install --path .` during development.
+you scaffolded before picking an agent. The binary itself is distributed via
+crates.io — `cargo install engrym` (or `cargo install --path .` from a clone)
+builds it and places `engrym` on PATH.

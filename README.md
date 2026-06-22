@@ -1,11 +1,28 @@
 # engrym
 
-A fast, AI-first knowledge base over Markdown. Your `.md` files (with YAML
-frontmatter) are the source of truth; a disposable SQLite index gives instant
-keyword, semantic, topic, and graph queries. Built for coding agents to *query
-and encode* what a repo knows — and plain enough for humans to review in a diff.
+**A knowledge base for your codebase — stored as Markdown your coding agent can
+read and write.**
+
+engrym captures what a repo *knows* (architecture, decisions, the non-obvious
+gotchas) as a graph of plain `.md` files, then builds a disposable SQLite index
+over them for instant keyword, semantic, topic, and graph search. It's built so
+coding agents **retrieve** that knowledge before a task and **record** durable
+findings after — so the same things stop getting re-explained every session.
+The source of truth stays plain Markdown with a little YAML frontmatter, so a
+human reviews it in a normal diff.
 
 > *engrym* — a play on **engram**, a stored memory trace.
+
+## Why you'd want it
+
+- **Onboard in minutes, not days.** `engrym search "how does auth work"` returns
+  the exact passage — no spelunking through the codebase.
+- **Your agent stops re-deriving the obvious.** Knowledge compounds in the repo
+  instead of evaporating when the chat window closes.
+- **No lock-in, no cloud.** Just Markdown plus a rebuildable index. Embeddings
+  run locally and offline by default — your code never leaves the machine.
+- **Reviewable like code.** Every fact is a line in a `.md` file; changes show
+  up in pull requests.
 
 ## Install
 
@@ -31,22 +48,43 @@ cargo install --path .     # builds + installs onto PATH
 # or just: cargo build --release   → binary at target/release/engrym
 ```
 
-## Use
+## Quick start
+
+In any repo, one command sets everything up:
 
 ```sh
-engrym init                 # scaffold a repo + hand off to an agent to build the KB
-engrym index                # (re)build the index from your docs
+engrym init      # scaffold engrym + hand off to your agent to build the initial KB
+```
+
+`init` writes `engrym.toml`, installs the agent skills, and hands a prompt to
+your coding agent (Claude Code, Codex, …) to author the first docs *from your
+codebase*. From then on the agent retrieves and records knowledge on its own.
+
+**Just want to try it without touching the repo?** Add `--local`:
+
+```sh
+engrym init --local   # KB lives outside the repo, in ~/.engrym/ — zero files added
+```
+
+Local mode keeps the entire KB (docs + index) under `~/.engrym/`, keyed to the
+git root, so nothing is committed and the working tree stays clean. It's the
+low-commitment way to start; everything below works identically. (See
+[Local mode](#agents) for how the agent still finds it.)
+
+Once a KB exists, query it:
+
+```sh
 engrym search "how does hybrid search work"   # hybrid keyword + semantic retrieval
 engrym topic indexing                         # everything under a topic
-engrym related hybrid-search                  # typed graph neighborhood of a doc
+engrym related hybrid-search                  # a document's typed graph neighborhood
 engrym show engrym-overview                   # print a document
-engrym browse               # read & navigate the KB in your browser
-engrym deinit               # remove engrym from the repo entirely (inverse of init)
+engrym browse                                 # read & navigate the KB in your browser
+engrym index                                  # (re)build the index after editing docs
 ```
 
 Every command takes `--json` (for agents) and `--repo <dir>` (target another
-repo). This repo dogfoods itself — its [`docs/`](docs/) is an engrym KB about
-engrym, so the examples above work right here.
+repo). **This repo dogfoods itself** — its [`docs/`](docs/) is an engrym KB
+about engrym, so the queries above all work right here, right now.
 
 ## Commands
 

@@ -16,13 +16,19 @@ relations, topic paths, and altitude levels, queryable via the `engrym` CLI.
 Treat it as a resource you *pull from* — it must never block or slow the task.
 Every query is milliseconds; add `--json` when you want to parse output.
 
-**Reach the KB through the CLI, never by guessing file paths.** The docs root is
-configurable, and in *local mode* the KB lives outside the repo (under
-`~/.engrym/projects/…`) so the repo is never touched — but `engrym search` /
-`show` / `topic` / `related` resolve it the same way wherever it lives. If a
-command reports this isn't an engrym repo, there's no KB here — proceed without
-one. Only when you must read raw files, take the docs root from `engrym.toml`
-rather than assuming `docs/`.
+**First, confirm a KB is reachable here — then reach it through the CLI, never
+by guessing file paths.** Run `engrym where` (a millisecond gate): it resolves
+the KB whether it lives in the repo (`engrym.toml`) or in a local store outside
+it (`~/.engrym/projects/…`, so the repo is untouched), and it follows git
+worktrees and linked clones back to the one shared store. If it reports no KB
+(non-zero exit; `{"kb": false}` with `--json`), there's none here — proceed
+without one. It may instead report a `link_candidate`: a KB for *this same repo*
+under another clone — mention it, since the user can adopt it with `engrym link`.
+Everything else (`search` / `show` / `topic` / `related`) resolves the KB the
+same way wherever it lives; only when you must read raw files, take the docs root
+from `engrym.toml` rather than assuming `docs/`. If `engrym where` reports
+`skill_outdated`, this skill is behind the installed CLI — tell the user to run
+`engrym install skills --refresh`.
 
 Two reflexes: **retrieve** what's already known — to *orient* a task or to
 *comprehend* the codebase — and **capture** durable knowledge after.
@@ -117,6 +123,9 @@ engrym lint --strict     # catches dangling relation targets and topic typos
 
 ## Guardrails
 
+- **Gate first.** `engrym where` is the source of truth for whether a KB applies
+  here — it resolves worktrees and linked clones — so there's no list of repos
+  to keep updated. Trust it over any remembered set of "engrym repos."
 - **Pull, never block.** One cheap query to orient; skip it when the task is
   clearly unrelated to documented knowledge.
 - **Non-obvious only.** Protect the signal-to-noise of the KB.

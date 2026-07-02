@@ -11,6 +11,7 @@
 
 use super::agents::{self, Choice};
 use crate::config;
+use crate::registry::{self, Registry};
 use anyhow::{bail, Context, Result};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -45,68 +46,87 @@ pub struct InitArgs {
 
 pub fn run(args: InitArgs) -> Result<()> {
     let repo = &args.root;
+    let anchor = config::repo_anchor(repo);
 
-    // Where config / docs / index live: the repo itself, or an external folder
-    // keyed by the repo (local mode, which never writes into the repo).
-    let (state_dir, anchor) = if args.local {
-        let anchor = config::repo_anchor(repo);
-        let dir = config::local_project_dir(&anchor)
-            .context("cannot resolve the engrym store (set $HOME or $ENGRYM_HOME)")?;
-        (dir, Some(anchor))
-    } else {
-        (repo.clone(), None)
+    // Dedupe FIRST — before scaffolding, skill install, or the bootstrap
+    // handoff: if a KB for this *same repo* already exists (a local store matched
+    // by `origin` URL), offer to link this checkout to it rather than build a
+    // second, disconnected one. Linking reuses the already-built KB, so we skip
+    // scaffolding and bootstrapping below — but still install the skills, so the
+    // agent in *this* checkout can query the shared KB.
+    let linked_dir = reuse_existing_kb(&anchor, args.json)?;
+    let linked = linked_dir.is_some();
+
+    // Where config / docs / index live: the linked store, an external folder
+    // (local mode), or the repo itself (in-repo). A linked checkout has no
+    // in-repo footprint, so skills go to the repo-free location too.
+    let skills_local = args.local || linked;
+    let (state_dir, source_anchor) = match (&linked_dir, args.local) {
+        (Some(dir), _) => (dir.clone(), Some(anchor.clone())),
+        (None, true) => {
+            let dir = config::local_project_dir(&anchor)
+                .context("cannot resolve the engrym store (set $HOME or $ENGRYM_HOME)")?;
+            (dir, Some(anchor.clone()))
+        }
+        (None, false) => (repo.clone(), None),
     };
-
-    let config_path = state_dir.join(config::CONFIG_FILENAME);
-    if config_path.exists() && !args.force {
-        bail!(
-            "{} already exists — this repo is already initialized (use --force to re-scaffold)",
-            config_path.display()
-        );
-    }
 
     let mut created: Vec<String> = Vec::new();
 
-    // Where the docs live, relative to the state root. In-repo init asks (the
-    // repo may already use `docs/` for something else); local mode keeps `docs`
-    // inside its own store. `--docs` overrides non-interactively.
-    let docs_root = resolve_docs_root(&args)?;
+    // Scaffold config + docs, unless we linked to an already-built KB.
+    if !linked {
+        let config_path = state_dir.join(config::CONFIG_FILENAME);
+        if config_path.exists() && !args.force {
+            bail!(
+                "{} already exists — this repo is already initialized (use --force to re-scaffold)",
+                config_path.display()
+            );
+        }
 
-    // Config: substitute the chosen docs root into the template, then (local
-    // mode) prepend a header recording the binding.
-    let base = CONFIG_TEMPLATE.replace("root = \"docs\"", &format!("root = \"{}\"", docs_root));
-    let config_content = match &anchor {
-        Some(a) => local_config(&base, a, &state_dir),
-        None => base,
-    };
-    write_if_needed(&config_path, &config_content, args.force, &mut created, repo)?;
+        // Where the docs live, relative to the state root. In-repo init asks (the
+        // repo may already use `docs/` for something else); local mode keeps
+        // `docs` inside its own store. `--docs` overrides non-interactively.
+        let docs_root = resolve_docs_root(&args)?;
+        let base = CONFIG_TEMPLATE.replace("root = \"docs\"", &format!("root = \"{}\"", docs_root));
+        let config_content = match &source_anchor {
+            Some(a) => local_config(&base, a, &state_dir),
+            None => base,
+        };
+        write_if_needed(&config_path, &config_content, args.force, &mut created, repo)?;
 
-    let docs_dir = state_dir.join(&docs_root);
-    if !docs_dir.exists() {
-        std::fs::create_dir_all(&docs_dir)
-            .with_context(|| format!("creating {}", docs_dir.display()))?;
-        created.push(agents::display_path(&docs_dir, repo));
+        let docs_dir = state_dir.join(&docs_root);
+        if !docs_dir.exists() {
+            std::fs::create_dir_all(&docs_dir)
+                .with_context(|| format!("creating {}", docs_dir.display()))?;
+            created.push(agents::display_path(&docs_dir, repo));
+        }
+
+        // Only an in-repo index needs gitignoring; a local one is already outside.
+        if !args.local {
+            ensure_gitignore(repo, &mut created)?;
+        }
+
+        // Register a newly-created local store so future worktrees/clones of this
+        // repo can discover it (and dedupe against it by origin URL).
+        if let Some(a) = &source_anchor {
+            if let Some(key) = state_dir.file_name().and_then(|s| s.to_str()) {
+                let mut reg = Registry::load();
+                if reg.link(a, key, registry::repo_identity(a)) {
+                    let _ = reg.save();
+                }
+            }
+        }
     }
 
-    // Only an in-repo index needs gitignoring; a local one is already outside.
-    if !args.local {
-        ensure_gitignore(repo, &mut created)?;
-    }
-
-    // Pick the agent, then install the skills into *its* directory only.
+    // Install the skills (fresh KB or linked one — the agent needs them either
+    // way) and record the repo in the agent's global memory.
     let choice =
         agents::resolve_choice(args.agent_cmd.as_deref(), args.agent.as_deref(), args.json)?;
     if let Choice::Known(a) = &choice {
-        created.extend(agents::install_skills_for(a, repo, args.local)?);
-
-        // Record the repo in the agent's global memory (a user-global file — it
-        // doesn't touch the repo) so the agent knows this repo has a KB. This
-        // matters most in local mode (no in-repo cue at all), but it's done for
-        // in-repo KBs too. Key it by the bound repo, not the external state dir.
+        created.extend(agents::install_skills_for(a, repo, skills_local)?);
         if a.has_memory() {
-            // Key by the same anchor the standalone `install memory` and
-            // discovery use, so entries match across commands.
-            let (mem_file, added) = agents::add_memory_entry(a, &config::repo_anchor(repo))?;
+            // Key by the same anchor discovery and `install memory` use.
+            let (mem_file, added) = agents::add_memory_entry(a, &anchor)?;
             if added {
                 created.push(agents::display_path(&mem_file, repo));
             }
@@ -119,7 +139,8 @@ pub fn run(args: InitArgs) -> Result<()> {
             serde_json::json!({
                 "initialized": state_dir.to_string_lossy(),
                 "repo": repo.to_string_lossy(),
-                "local": args.local,
+                "local": skills_local,
+                "linked": linked,
                 "agent": choice.describe(),
                 "created": created,
             })
@@ -127,7 +148,10 @@ pub fn run(args: InitArgs) -> Result<()> {
         return Ok(());
     }
 
-    if args.local {
+    if linked {
+        println!("Linked {} to the existing KB at {}", repo.display(), state_dir.display());
+        println!("  (same repo detected by origin URL — reusing its knowledge, no new store)");
+    } else if args.local {
         println!("Initialized a local engrym KB for {}", repo.display());
         println!("  stored in {} (the repo is untouched)", state_dir.display());
     } else {
@@ -138,7 +162,50 @@ pub fn run(args: InitArgs) -> Result<()> {
     }
     println!();
 
-    act_on_choice(&choice, repo)
+    // A linked KB is already populated — skip the bootstrap handoff. A fresh one
+    // hands off to the agent to build it.
+    if linked {
+        println!("The knowledge base is ready to query (e.g. `engrym search \"…\"`).");
+        Ok(())
+    } else {
+        act_on_choice(&choice, repo)
+    }
+}
+
+/// If a local KB for the *same repo* already exists under another clone (matched
+/// by normalized `origin` URL), offer to link this checkout to it instead of
+/// scaffolding a disconnected second store. Returns the shared store dir when
+/// linked. Only prompts on an interactive terminal — non-interactive runs never
+/// link silently, so automation stays predictable.
+fn reuse_existing_kb(anchor: &Path, json: bool) -> Result<Option<PathBuf>> {
+    let reg = Registry::load();
+    // Already mapped — the normal flow will report "already initialized".
+    if reg.key_for_anchor(anchor).is_some() {
+        return Ok(None);
+    }
+    let Some(identity) = registry::repo_identity(anchor) else { return Ok(None) };
+    let Some(entry) = reg.find_by_identity(&identity) else { return Ok(None) };
+    if !registry::store_exists(&entry.key) {
+        return Ok(None);
+    }
+    let Some(dir) = config::projects_root().map(|r| r.join(&entry.key)) else {
+        return Ok(None);
+    };
+
+    if json || !std::io::stdin().is_terminal() {
+        return Ok(None); // never link without an explicit yes
+    }
+    println!("An engrym KB for this repo already exists (origin {identity}):");
+    println!("  {}", dir.display());
+    let ans = agents::prompt("Reuse it for this checkout? [Y/n]: ", "y")?;
+    if ans.trim().eq_ignore_ascii_case("n") || ans.trim().eq_ignore_ascii_case("no") {
+        return Ok(None);
+    }
+    let key = entry.key.clone();
+    let mut reg = reg;
+    reg.link(anchor, &key, Some(identity));
+    reg.save().context("saving the registry")?;
+    Ok(Some(dir))
 }
 
 /// Decide the docs directory (relative to the state root). `--docs` wins; else

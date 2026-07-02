@@ -11,6 +11,7 @@ mod db;
 mod embed;
 mod model;
 mod parse;
+mod registry;
 mod vector;
 
 use anyhow::Result;
@@ -127,6 +128,22 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+
+    /// Report whether a KB is reachable here (a fast gate for skills/agents).
+    /// Exits non-zero when none is found.
+    Where,
+
+    /// List the local (external) KB stores and how they're shared across clones.
+    List,
+
+    /// Share this checkout's KB with another clone/worktree of the same repo.
+    Link {
+        /// A store key (`engrym list`) or a path to another checkout of the repo.
+        target: String,
+    },
+
+    /// Detach this checkout from a shared KB (reverting to its own store).
+    Unlink,
 
     /// Serve a local web UI to read and navigate the KB.
     Browse {
@@ -246,6 +263,10 @@ enum InstallTarget {
         /// Use the local-mode (repo-free) skill location where the agent needs one.
         #[arg(long)]
         local: bool,
+        /// Refresh every already-installed location (project + user-global) to the
+        /// running binary's version. Use after upgrading engrym. Ignores --agent.
+        #[arg(long)]
+        refresh: bool,
     },
 
     /// Record this repo in an agent's global memory (so it knows the repo has a KB).
@@ -306,8 +327,8 @@ fn run() -> Result<()> {
     }
     if let Command::Install { target } = cli.command {
         let target = match target {
-            InstallTarget::Skills { agent, local } => {
-                commands::install::Target::Skills { agent, local }
+            InstallTarget::Skills { agent, local, refresh } => {
+                commands::install::Target::Skills { agent, local, refresh }
             }
             InstallTarget::Memory { agent } => commands::install::Target::Memory { agent },
         };
@@ -336,13 +357,31 @@ fn run() -> Result<()> {
         return commands::deinit::run(&start, yes, cli.json);
     }
 
+    // KB discovery/linking runs before config discovery: `where` must answer
+    // "no KB" gracefully (not error), and link/unlink/list operate on the
+    // registry regardless of whether a config is present here.
+    match cli.command {
+        Command::Where => {
+            let present = commands::kb::where_(&start, cli.json)?;
+            std::process::exit(if present { 0 } else { 1 });
+        }
+        Command::List => return commands::kb::list(cli.json),
+        Command::Link { ref target } => return commands::kb::link(&start, target, cli.json),
+        Command::Unlink => return commands::kb::unlink(&start, cli.json),
+        _ => {}
+    }
+
     let config = Config::discover(&start)?;
 
     match cli.command {
         Command::Init { .. }
         | Command::Install { .. }
         | Command::Uninstall { .. }
-        | Command::Deinit { .. } => unreachable!("handled above"),
+        | Command::Deinit { .. }
+        | Command::Where
+        | Command::List
+        | Command::Link { .. }
+        | Command::Unlink => unreachable!("handled above"),
         Command::Reset { yes } => commands::reset::run(&config, yes, cli.json),
         Command::Browse { port, open } => commands::browse::run(&config, port, open),
         Command::Index { no_embed } => commands::index::run(&config, no_embed, cli.json),

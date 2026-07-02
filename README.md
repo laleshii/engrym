@@ -103,7 +103,10 @@ is typed literally.
 | `engrym lint [--strict]` | Validate the frontmatter contract |
 | `engrym browse [--port <n>] [--open]` | Local web UI to read/navigate the KB |
 | `engrym serve [--stop]` | Warm embedding daemon (usually automatic) |
-| `engrym install <skills\|memory>` | Install agent skills, or record the repo in agent memory |
+| `engrym where` | Report whether a KB is reachable here (a fast gate for agents) |
+| `engrym list` | List local KB stores and how they're shared across checkouts |
+| `engrym link <key\|path>` / `unlink` | Share (or detach) this checkout's KB with another clone |
+| `engrym install <skills [--refresh]\|memory>` | Install/refresh agent skills, or record the repo in agent memory |
 | `engrym uninstall <skills\|memory>` | Inverse of `install` |
 | `engrym reset` | Delete the KB's documents + index (keeps config) |
 | `engrym deinit` | Remove engrym from the repo entirely (inverse of `init`) |
@@ -158,6 +161,16 @@ model-judged, never a hook on every prompt.
 touched. Because there's then no in-repo cue, `init --local` also records the
 repo in the agent's global memory (`~/.claude/CLAUDE.md`, `~/.codex/AGENTS.md`);
 `install`/`uninstall memory` manage it on demand.
+
+**Worktrees & multiple clones.** A local KB is keyed to the repo, not the
+checkout: git worktrees resolve back to one shared store automatically, and
+separate clones of the same repo (matched by `origin` URL) can share one too —
+`engrym init` offers to link a same-repo clone, or use `engrym link` explicitly.
+Discovery is a query, not a list: agents run `engrym where` (which resolves
+worktrees and links) to decide whether a KB applies, so there's nothing to keep
+updated by hand. The self-gating **working** skill installs once, globally, and
+no-ops where there's no KB; after upgrading the CLI, `engrym install skills
+--refresh` brings installed copies up to date.
 
 ## Configuration (`engrym.toml`)
 

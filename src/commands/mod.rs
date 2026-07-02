@@ -8,6 +8,7 @@ pub mod deinit;
 pub mod index;
 pub mod init;
 pub mod install;
+pub mod kb;
 pub mod lint;
 pub mod related;
 pub mod reset;

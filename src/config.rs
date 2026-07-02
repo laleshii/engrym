@@ -175,6 +175,12 @@ impl Config {
         if let Some(dir) = local_project_dir(&anchor) {
             let config_path = dir.join(CONFIG_FILENAME);
             if config_path.is_file() {
+                // Learn this anchor↔store mapping (and the repo's identity) so a
+                // store created before the registry becomes linkable by identity,
+                // and so worktrees/clones can later find it. Writes only on change.
+                if let Some(key) = dir.file_name().and_then(|s| s.to_str()) {
+                    crate::registry::learn(&anchor, key);
+                }
                 return Self::load(&config_path, Some(anchor));
             }
         }
@@ -257,13 +263,28 @@ pub fn projects_root() -> Option<PathBuf> {
     engrym_home().map(|h| h.join(PROJECTS_SUBDIR))
 }
 
+/// The store key an anchor resolves to: an explicit registry link if one exists
+/// (so worktrees and linked clones share a KB), else the default path-derived
+/// [`project_key`]. Pure lookup — never mutates the registry.
+pub fn local_key(anchor: &Path) -> String {
+    if let Some(k) = crate::registry::Registry::load().key_for_anchor(anchor) {
+        return k;
+    }
+    project_key(anchor)
+}
+
 /// The local KB directory bound to `anchor`, if the store root resolves.
 pub fn local_project_dir(anchor: &Path) -> Option<PathBuf> {
-    projects_root().map(|r| r.join(project_key(anchor)))
+    projects_root().map(|r| r.join(local_key(anchor)))
 }
 
 /// The stable anchor a repo is keyed by: its git top-level if present, else the
 /// directory itself. Canonicalized so symlinks / relative paths yield one key.
+///
+/// A linked git worktree has a `.git` *file* (not a directory) pointing at the
+/// real gitdir; we resolve it to the **main worktree root** so every worktree of
+/// a repo shares one anchor — and therefore one KB — instead of each ephemeral
+/// checkout getting its own.
 pub fn repo_anchor(start: &Path) -> PathBuf {
     let abs = if start.is_absolute() {
         start.to_path_buf()
@@ -272,7 +293,13 @@ pub fn repo_anchor(start: &Path) -> PathBuf {
     };
     let mut dir = abs.clone();
     loop {
-        if dir.join(".git").exists() {
+        let git = dir.join(".git");
+        if git.exists() {
+            if git.is_file() {
+                if let Some(main) = worktree_main_root(&git) {
+                    return std::fs::canonicalize(&main).unwrap_or(main);
+                }
+            }
             return std::fs::canonicalize(&dir).unwrap_or(dir);
         }
         if !dir.pop() {
@@ -280,6 +307,37 @@ pub fn repo_anchor(start: &Path) -> PathBuf {
         }
     }
     std::fs::canonicalize(&abs).unwrap_or(abs)
+}
+
+/// Given a linked worktree's `.git` *file*, resolve the main worktree's root by
+/// reading git's own metadata — the `gitdir:` pointer and the `commondir` file —
+/// with no `git` subprocess. Returns `None` for bare repos or malformed
+/// metadata, so the caller can fall back to the worktree directory itself.
+fn worktree_main_root(git_file: &Path) -> Option<PathBuf> {
+    let content = std::fs::read_to_string(git_file).ok()?;
+    let gitdir_raw = content.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
+    let worktree_dir = git_file.parent()?;
+    // `gitdir:` may be absolute or relative to the worktree directory.
+    let gitdir = {
+        let p = PathBuf::from(gitdir_raw);
+        if p.is_absolute() { p } else { worktree_dir.join(p) }
+    };
+    // `<gitdir>/commondir` points at the shared git dir (usually `../..`); its
+    // absence means this isn't a linked worktree after all.
+    let common = match std::fs::read_to_string(gitdir.join("commondir")) {
+        Ok(s) => {
+            let rel = PathBuf::from(s.trim());
+            if rel.is_absolute() { rel } else { gitdir.join(rel) }
+        }
+        Err(_) => return None,
+    };
+    let common = std::fs::canonicalize(&common).unwrap_or(common);
+    // The common git dir is `<main>/.git`; its parent is the main worktree root.
+    // Anything else (e.g. a bare repo) has no main working tree — bail.
+    if common.file_name()?.to_str()? == ".git" {
+        return Some(common.parent()?.to_path_buf());
+    }
+    None
 }
 
 /// A filesystem-safe, human-readable, collision-resistant key for a repo:
@@ -305,6 +363,40 @@ pub fn project_key(anchor: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Command;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("run git")
+            .status
+            .success();
+        assert!(ok, "git {:?} failed in {}", args, dir.display());
+    }
+
+    #[test]
+    fn repo_anchor_resolves_a_worktree_to_the_main_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = std::fs::canonicalize(tmp.path()).unwrap();
+
+        git(&main, &["init", "-q"]);
+        git(&main, &["config", "user.email", "t@t.t"]);
+        git(&main, &["config", "user.name", "t"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "init"]);
+
+        // A linked worktree — its `.git` is a file, not a directory.
+        let wt = main.join("wt");
+        git(&main, &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()]);
+        assert!(wt.join(".git").is_file(), "worktree .git should be a file");
+
+        // Both the main checkout and the worktree resolve to the same anchor.
+        assert_eq!(repo_anchor(&wt), main);
+        assert_eq!(repo_anchor(&main), main);
+        // …so they key to one KB.
+        assert_eq!(project_key(&repo_anchor(&wt)), project_key(&repo_anchor(&main)));
+    }
 
     #[test]
     fn project_key_is_stable_readable_and_path_specific() {

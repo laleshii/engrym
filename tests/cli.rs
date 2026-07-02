@@ -135,6 +135,17 @@ fn tempdir() -> TempDir {
     tempfile::tempdir().expect("tempdir")
 }
 
+/// A fake clone: a `.git/` dir whose config carries an `origin` remote, enough
+/// for `repo_anchor` (checks `.git` exists) and `repo_identity` (reads the URL).
+fn fake_clone(dir: &Path, origin: &str) {
+    fs::create_dir_all(dir.join(".git")).unwrap();
+    fs::write(
+        dir.join(".git").join("config"),
+        format!("[remote \"origin\"]\n\turl = {origin}\n"),
+    )
+    .unwrap();
+}
+
 /// The single subdirectory of `dir` (asserts there is exactly one).
 fn only_subdir(dir: &Path) -> PathBuf {
     let mut subs: Vec<PathBuf> = fs::read_dir(dir)
@@ -703,4 +714,92 @@ fn relocate_moves_files_between_layouts() {
     // Flat layout: docs/<id>.md, and the altitude subdir is gone.
     assert!(ws.repo().join("docs/auth.md").is_file());
     assert!(!ws.repo().join("docs/1/auth.md").exists());
+}
+
+// --------------------------------------------------------------------------
+// where / list / link — discovery and cross-clone linking
+// --------------------------------------------------------------------------
+
+#[test]
+fn where_reports_an_in_repo_kb() {
+    let ws = Workspace::new();
+    ws.run(&["init", "--agent", "none"]).ok();
+    let v = ws.run(&["where", "--json"]).ok().json();
+    assert_eq!(v["kb"], true);
+    assert_eq!(v["mode"], "in-repo");
+}
+
+#[test]
+fn where_is_a_nonzero_gate_when_no_kb() {
+    let ws = Workspace::new();
+    ws.git_init();
+    let out = ws.run(&["where", "--json"]);
+    out.fail(); // exit code gates the skill
+    assert_eq!(out.json()["kb"], false);
+}
+
+#[test]
+fn link_shares_a_local_kb_across_clones_of_the_same_repo() {
+    let ws = Workspace::new();
+    let root = tempdir();
+    let a = root.path().join("clone-a");
+    let b = root.path().join("clone-b");
+    let origin = "git@github.com:acme/widget.git";
+    fake_clone(&a, origin);
+    fake_clone(&b, origin); // separate clone, same remote
+
+    // A local KB for clone A.
+    ws.run_in(&a, &["init", "--local", "--agent", "none", "--json"]).ok();
+    assert_eq!(ws.run_in(&a, &["where", "--json"]).ok().json()["kb"], true);
+
+    // Clone B has no KB of its own, but sees A's as a link candidate.
+    let wb = ws.run_in(&b, &["where", "--json"]);
+    wb.fail();
+    let vb = wb.json();
+    assert_eq!(vb["kb"], false);
+    assert!(vb["link_candidate"].is_string(), "expected a link candidate: {vb}");
+
+    // Link B → A's KB; now it resolves and is marked shared.
+    ws.run_in(&b, &["link", a.to_str().unwrap(), "--json"]).ok();
+    let wb2 = ws.run_in(&b, &["where", "--json"]).ok().json();
+    assert_eq!(wb2["kb"], true);
+    assert_eq!(wb2["shared"], true);
+
+    // One store on disk, now with both anchors registered.
+    let stores = ws.run(&["list", "--json"]).ok().json();
+    let stores = stores["stores"].as_array().unwrap().clone();
+    assert_eq!(stores.len(), 1);
+    assert_eq!(stores[0]["anchors"].as_array().unwrap().len(), 2);
+
+    // Unlink B → back to no KB there; A untouched.
+    ws.run_in(&b, &["unlink", "--json"]).ok();
+    ws.run_in(&b, &["where"]).fail();
+    assert_eq!(ws.run_in(&a, &["where", "--json"]).ok().json()["kb"], true);
+}
+
+#[test]
+fn install_skills_refresh_updates_a_stale_installed_skill() {
+    let ws = Workspace::new();
+    ws.run(&["init", "--agent", "claude", "--json"]).ok();
+    let skill = ws.repo().join(".claude/skills/engrym/SKILL.md");
+    assert!(skill.is_file());
+
+    // Freshly installed → current.
+    assert_eq!(ws.run(&["where", "--json"]).ok().json()["skill_outdated"], false);
+
+    // Simulate an older install by rewriting the version stamp.
+    let text = fs::read_to_string(&skill).unwrap();
+    let stale = text.replacen(
+        &format!("engrym-skill-version: {}", env!("CARGO_PKG_VERSION")),
+        "engrym-skill-version: 0.0.1",
+        1,
+    );
+    assert_ne!(text, stale, "expected a version stamp to rewrite");
+    fs::write(&skill, stale).unwrap();
+    assert_eq!(ws.run(&["where", "--json"]).ok().json()["skill_outdated"], true);
+
+    // Refresh brings every installed location back to current.
+    let v = ws.run(&["install", "skills", "--refresh", "--json"]).ok().json();
+    assert!(!v["refreshed"].as_array().unwrap().is_empty());
+    assert_eq!(ws.run(&["where", "--json"]).ok().json()["skill_outdated"], false);
 }

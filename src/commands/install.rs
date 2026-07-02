@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 pub enum Target {
     /// Install the engrym skills for an agent (`agent` = `--agent <bin>`).
     /// `local` routes to a repo-free skill location where the agent needs one.
-    Skills { agent: Option<String>, local: bool },
+    Skills { agent: Option<String>, local: bool, refresh: bool },
     /// Record this repo in an agent's global memory so it learns the repo has an
     /// engrym KB (no repo footprint — see `agents::add_memory_entry`).
     Memory { agent: Option<String> },
@@ -33,8 +33,12 @@ pub struct InstallArgs {
 
 pub fn run(args: InstallArgs) -> Result<()> {
     match args.target {
-        Target::Skills { agent, local } => {
-            install_skills(&args.root, agent.as_deref(), local, args.json)
+        Target::Skills { agent, local, refresh } => {
+            if refresh {
+                refresh_skills(&args.root, args.json)
+            } else {
+                install_skills(&args.root, agent.as_deref(), local, args.json)
+            }
         }
         Target::Memory { agent } => install_memory(&args.root, agent.as_deref(), args.json),
     }
@@ -94,6 +98,28 @@ fn install_skills(root: &Path, agent: Option<&str>, local: bool, json: bool) -> 
         println!("Installed engrym skills for {}:", a.label);
         for w in &written {
             println!("  + {}", w);
+        }
+    }
+    Ok(())
+}
+
+/// `install skills --refresh` — update every already-installed location to the
+/// running binary's version (use after upgrading engrym). No agent prompt: it
+/// refreshes wherever engrym skills already exist, project and user-global.
+fn refresh_skills(root: &Path, json: bool) -> Result<()> {
+    let refreshed = agents::refresh_installed_skills(root)?;
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "version": agents::skill_version(), "refreshed": refreshed })
+        );
+    } else if refreshed.is_empty() {
+        println!("No installed engrym skills found to refresh.");
+        println!("  Install them with `engrym install skills` (or `engrym init`).");
+    } else {
+        println!("Refreshed engrym skills to v{}:", agents::skill_version());
+        for w in &refreshed {
+            println!("  ~ {}", w);
         }
     }
     Ok(())

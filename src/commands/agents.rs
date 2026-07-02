@@ -253,6 +253,35 @@ pub fn install_skills_for(agent: &KnownAgent, root: &Path, local: bool) -> Resul
     let Some(base) = loc.base(root) else {
         return Ok(vec![]); // e.g. $HOME unset
     };
+    write_skills_into(&base, root)
+}
+
+/// The running binary's version — stamped into installed skills so a later
+/// upgrade can detect (and refresh) stale on-disk copies.
+pub fn skill_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+/// Skill content plus a machine-readable version stamp. The skill text lives in
+/// the binary (`include_str!`), so the installed copy only changes when re-run;
+/// the stamp is how `--refresh` and staleness checks tell versions apart.
+fn stamped(content: &str) -> String {
+    format!("{content}\n<!-- engrym-skill-version: {} -->\n", skill_version())
+}
+
+/// The engrym version stamped into an installed `SKILL.md`, if any.
+pub fn installed_skill_version(skill_md: &Path) -> Option<String> {
+    let text = std::fs::read_to_string(skill_md).ok()?;
+    text.lines().rev().find_map(|l| {
+        l.trim()
+            .strip_prefix("<!-- engrym-skill-version:")
+            .and_then(|r| r.strip_suffix("-->"))
+            .map(|v| v.trim().to_string())
+    })
+}
+
+/// Write all skills (stamped) under `base`, returning their display paths.
+fn write_skills_into(base: &Path, display_root: &Path) -> Result<Vec<String>> {
     let mut written = Vec::new();
     for (name, content) in SKILLS {
         let path = base.join(name).join("SKILL.md");
@@ -260,10 +289,57 @@ pub fn install_skills_for(agent: &KnownAgent, root: &Path, local: bool) -> Resul
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        std::fs::write(&path, *content).with_context(|| format!("writing {}", path.display()))?;
-        written.push(display_path(&path, root));
+        std::fs::write(&path, stamped(content))
+            .with_context(|| format!("writing {}", path.display()))?;
+        written.push(display_path(&path, display_root));
     }
     Ok(written)
+}
+
+/// Whether any already-installed engrym skill (project or user-global) is
+/// stamped with a version other than the running binary's — i.e. a refresh is
+/// due after an upgrade. Unstamped copies (installed before versioning) count as
+/// stale. Cheap: a handful of `stat`/reads over known locations.
+pub fn any_installed_skill_outdated(root: &Path) -> bool {
+    let cur = skill_version();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for agent in KNOWN_AGENTS {
+        for loc in [agent.skills.as_ref(), agent.skills_local.as_ref()].into_iter().flatten() {
+            let Some(base) = loc.base(root) else { continue };
+            if seen.contains(&base) {
+                continue;
+            }
+            seen.push(base.clone());
+            let md = base.join("engrym").join("SKILL.md");
+            if md.is_file() && installed_skill_version(&md).as_deref() != Some(cur) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Re-install the skills into every location that *already* has them — the given
+/// repo's project dir and the user-global dirs — bringing stale copies up to the
+/// running binary. This is the answer to "the CLI upgraded, refresh the skills
+/// everywhere," including global installs. Returns the refreshed display paths.
+pub fn refresh_installed_skills(root: &Path) -> Result<Vec<String>> {
+    let mut refreshed = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    for agent in KNOWN_AGENTS {
+        for loc in [agent.skills.as_ref(), agent.skills_local.as_ref()].into_iter().flatten() {
+            let Some(base) = loc.base(root) else { continue };
+            if seen.contains(&base) {
+                continue;
+            }
+            seen.push(base.clone());
+            // Only touch locations where engrym is already installed.
+            if base.join("engrym").join("SKILL.md").is_file() {
+                refreshed.extend(write_skills_into(&base, root)?);
+            }
+        }
+    }
+    Ok(refreshed)
 }
 
 /// Remove the engrym skills for one agent from its skill directory (the inverse

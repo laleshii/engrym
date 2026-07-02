@@ -803,3 +803,27 @@ fn install_skills_refresh_updates_a_stale_installed_skill() {
     assert!(!v["refreshed"].as_array().unwrap().is_empty());
     assert_eq!(ws.run(&["where", "--json"]).ok().json()["skill_outdated"], false);
 }
+
+#[test]
+fn registry_backfills_from_disk_on_first_use() {
+    let ws = Workspace::new();
+    let root = tempdir();
+    let a = root.path().join("a");
+    let b = root.path().join("b");
+    fake_clone(&a, "git@github.com:acme/a.git");
+    fake_clone(&b, "git@github.com:acme/b.git");
+    ws.run_in(&a, &["init", "--local", "--agent", "none", "--json"]).ok();
+    ws.run_in(&b, &["init", "--local", "--agent", "none", "--json"]).ok();
+
+    // Simulate first use after upgrade: the registry file doesn't exist yet.
+    let reg = ws.home().join(".engrym/registry.json");
+    assert!(reg.is_file());
+    fs::remove_file(&reg).unwrap();
+
+    // Using engrym in ONE repo rebuilds the whole registry from the stores on
+    // disk — including the sibling store we never visited this run.
+    ws.run_in(&a, &["where"]).ok();
+    let text = fs::read_to_string(&reg).unwrap();
+    assert!(text.contains("acme/a"), "current repo re-registered:\n{text}");
+    assert!(text.contains("acme/b"), "sibling store backfilled from disk:\n{text}");
+}

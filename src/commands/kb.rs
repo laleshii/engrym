@@ -65,7 +65,7 @@ pub fn where_(start: &Path, json: bool) -> Result<bool> {
             let anchor = config::repo_anchor(start);
             let identity = registry::repo_identity(&anchor);
             let hint = identity.as_deref().and_then(|id| {
-                let reg = Registry::load();
+                let reg = Registry::load_migrated();
                 let entry = reg.find_by_identity(id)?;
                 registry::store_exists(&entry.key).then(|| entry.key.clone())
             });
@@ -92,8 +92,9 @@ pub fn where_(start: &Path, json: bool) -> Result<bool> {
 /// `engrym list` — every local KB store on disk, enriched from the registry.
 /// Prunes dead anchors first (self-healing after worktree teardown).
 pub fn list(json: bool) -> Result<()> {
-    let mut reg = Registry::load();
+    let mut reg = Registry::load_migrated(); // one-time backfill if never built
     if reg.prune() {
+        // drop dead worktree anchors
         let _ = reg.save();
     }
 

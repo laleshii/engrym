@@ -178,7 +178,9 @@ pub fn run(args: InitArgs) -> Result<()> {
 /// linked. Only prompts on an interactive terminal — non-interactive runs never
 /// link silently, so automation stays predictable.
 fn reuse_existing_kb(anchor: &Path, json: bool) -> Result<Option<PathBuf>> {
-    let reg = Registry::load();
+    // On first use (no registry yet), backfill from disk so dedupe sees
+    // same-repo stores created before the registry existed.
+    let reg = Registry::load_migrated();
     // Already mapped — the normal flow will report "already initialized".
     if reg.key_for_anchor(anchor).is_some() {
         return Ok(None);

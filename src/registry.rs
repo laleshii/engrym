@@ -44,6 +44,12 @@ fn registry_path() -> Option<PathBuf> {
     config::engrym_home().map(|h| h.join(REGISTRY_FILE))
 }
 
+/// Whether the registry file doesn't exist yet — the trigger for a one-time
+/// backfill from on-disk stores.
+fn registry_missing() -> bool {
+    registry_path().map(|p| !p.exists()).unwrap_or(false)
+}
+
 fn anchor_str(anchor: &Path) -> String {
     anchor.to_string_lossy().into_owned()
 }
@@ -55,6 +61,19 @@ impl Registry {
         let Some(path) = registry_path() else { return Registry::default() };
         let Ok(text) = std::fs::read_to_string(&path) else { return Registry::default() };
         serde_json::from_str(&text).unwrap_or_default()
+    }
+
+    /// Load the registry, running the one-time backfill
+    /// ([`reconcile`](Self::reconcile)) only when the registry file doesn't exist
+    /// yet — the first use after upgrading (or after the file was deleted). Once
+    /// it exists this is a plain load, so there's no per-command scan.
+    pub fn load_migrated() -> Registry {
+        let missing = registry_missing();
+        let mut reg = Registry::load();
+        if missing && reg.reconcile() {
+            let _ = reg.save();
+        }
+        reg
     }
 
     /// Atomically persist the registry (temp file + rename), creating
@@ -132,6 +151,36 @@ impl Registry {
         hit
     }
 
+    /// Backfill entries for on-disk stores missing from the registry — those
+    /// created before the registry existed, or by another checkout. Each store
+    /// records its bound repo in its config header, so we recover the anchor +
+    /// identity from that. Cheap once complete: only *unmapped* stores trigger
+    /// git reads. Returns whether anything changed. This is what lets a missing
+    /// registry self-heal the moment engrym is used again.
+    pub fn reconcile(&mut self) -> bool {
+        let Some(root) = config::projects_root() else { return false };
+        let Ok(entries) = std::fs::read_dir(&root) else { return false };
+        let mut changed = false;
+        for e in entries.flatten() {
+            let cfg = e.path().join(config::CONFIG_FILENAME);
+            if !cfg.is_file() {
+                continue;
+            }
+            let Some(key) = e.file_name().to_str().map(str::to_string) else { continue };
+            // Already mapped to a live anchor? Nothing to backfill.
+            if self.repos.iter().any(|r| r.key == key && !r.anchors.is_empty()) {
+                continue;
+            }
+            if let Some(repo) = bound_repo(&cfg) {
+                if repo.exists() {
+                    let anchor = config::repo_anchor(&repo);
+                    changed |= self.link(&anchor, &key, repo_identity(&anchor));
+                }
+            }
+        }
+        changed
+    }
+
     /// Drop anchors whose path no longer exists (ephemeral worktrees torn down by
     /// e.g. `/remove-ticket`), and entries with neither anchors nor a live store.
     pub fn prune(&mut self) -> bool {
@@ -160,16 +209,34 @@ pub fn store_exists(key: &str) -> bool {
 /// identity). Writes only when something actually changed — safe on the hot
 /// read path. Best-effort: registry write failures are swallowed.
 pub fn learn(anchor: &Path, key: &str) {
+    // Only when the registry doesn't exist yet: heal the whole thing from disk
+    // (backfilling stores from other checkouts / from before the registry). Once
+    // the file exists this is skipped — no per-command scan.
+    let missing = registry_missing();
     let mut reg = Registry::load();
-    // Already mapped to this key with an identity recorded? Nothing to do.
-    if reg.repos.iter().any(|r| {
+    let mut changed = missing && reg.reconcile();
+    let mapped = reg.repos.iter().any(|r| {
         r.key == key && r.identity.is_some() && r.anchors.iter().any(|a| Path::new(a) == anchor)
-    }) {
-        return;
+    });
+    if !mapped {
+        changed |= reg.link(anchor, key, repo_identity(anchor));
     }
-    if reg.link(anchor, key, repo_identity(anchor)) {
+    if changed {
         let _ = reg.save();
     }
+}
+
+/// The repo a local store is bound to, from its `# Bound to repo: <path>` config
+/// header (written by `init --local`). `None` for stores without the header.
+fn bound_repo(config_path: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(config_path).ok()?;
+    text.lines().find_map(|l| {
+        l.trim()
+            .strip_prefix('#')
+            .map(str::trim)
+            .and_then(|t| t.strip_prefix("Bound to repo:"))
+            .map(|p| PathBuf::from(p.trim()))
+    })
 }
 
 /// The repo's identity for dedupe: its normalized `origin` remote URL, read from

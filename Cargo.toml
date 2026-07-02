@@ -1,6 +1,6 @@
 [package]
 name = "engrym"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Rares S"]
 description = "A fast, AI-first knowledge base layered over Markdown: typed relations, topic hierarchies, and hybrid search."

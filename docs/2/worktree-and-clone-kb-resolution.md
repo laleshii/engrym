@@ -46,6 +46,10 @@ metadata fall back to the worktree path (no regression).
 - **Lazy learn**: `Config::discover` records the anchor↔store mapping (and
   identity) on load, writing only on change, so a store created before the
   registry becomes linkable by identity.
+- **Self-heal**: when the registry file is *missing* (first use after upgrade, or
+  deleted), `Registry::reconcile` backfills entries for every on-disk store by
+  reading its `# Bound to repo:` header → anchor + identity. Gated on absence, so
+  it's a one-time migration, not a per-command scan (`load_migrated`).
 
 Forks stay separate (different origin). Root-commit hash is deliberately *not*
 used as the identity — forks and template-derived repos share it, so it's too

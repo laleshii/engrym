@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-02
+
+### Fixed
+
+- The local-KB registry now **self-heals**: on the first use after upgrading (or
+  any time the registry file is missing), engrym backfills it from the stores
+  already on disk — recovering each store's repo binding and `origin` identity —
+  so existing local KBs are recognized and dedupe/linking work with no manual
+  migration steps. The backfill runs only when the registry is absent, so
+  there's no per-command scan.
+
 ## [0.2.0] - 2026-07-02
 
 ### Added
@@ -72,7 +83,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   via RRF), topic/relation/altitude navigation, authoring commands, and
   `engrym browse` (a local web UI).
 
-[Unreleased]: https://github.com/laleshii/engrym/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/laleshii/engrym/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/laleshii/engrym/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/laleshii/engrym/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/laleshii/engrym/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/laleshii/engrym/compare/v0.1.0...v0.1.1

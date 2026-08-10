@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-10
+
+### Added
+
+- **opencode skill support.** `engrym init` / `install skills --agent opencode`
+  now install the engrym skills into opencode's native locations: project-level
+  `.opencode/skills/` (committed), or user-global `~/.config/opencode/skills/`
+  in local mode.
+
 ## [0.2.1] - 2026-07-02
 
 ### Fixed
@@ -83,7 +92,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   via RRF), topic/relation/altitude navigation, authoring commands, and
   `engrym browse` (a local web UI).
 
-[Unreleased]: https://github.com/laleshii/engrym/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/laleshii/engrym/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/laleshii/engrym/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/laleshii/engrym/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/laleshii/engrym/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/laleshii/engrym/compare/v0.1.1...v0.1.2

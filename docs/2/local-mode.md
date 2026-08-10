@@ -41,7 +41,8 @@ identically; only `repo_root` points at the external folder.
 ## Skill placement
 
 Local mode must not write into the repo, so skill install adapts: Claude Code's
-normally project-level `.claude/skills/` becomes user-global `~/.claude/skills/`
+normally project-level `.claude/skills/` becomes user-global `~/.claude/skills/`,
+and opencode's `.opencode/skills/` becomes `~/.config/opencode/skills/`
 (`KnownAgent::skills_for`). Codex is already user-global, so it's unchanged. See
 [[init-and-skill]].
 

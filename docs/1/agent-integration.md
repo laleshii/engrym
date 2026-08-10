@@ -43,7 +43,14 @@ quality bar — encode only durable, non-obvious knowledge, or the KB rots.
 The `engrym` CLI is agent-agnostic — anything that runs a shell can use it. Only
 the *delivery* of the skill differs, and `engrym init` installs it into the
 **chosen** agent's native skill directory and no other: Claude Code's
-project-level `.claude/skills/` (committed, travels with the repo) or Codex's
-user-global `~/.codex/skills/`. Agents without a skill mechanism still use the
+project-level `.claude/skills/` (committed, travels with the repo), opencode's
+project-level `.opencode/skills/`, or Codex's user-global `~/.codex/skills/`.
+Agents without a skill mechanism still use the
 CLI directly. `engrym install skills` re-runs just this step on demand — e.g. to
 refresh the skill text after a CLI upgrade. See [[init-and-skill]].
+
+opencode also reads `.claude/skills/` as a compatibility fallback, but engrym
+installs into the native `.opencode/skills/` anyway: the fallback is opt-out
+(`OPENCODE_DISABLE_CLAUDE_CODE_SKILLS`) and only helps repos where the Claude
+skills were already installed — the native location keeps each agent
+self-sufficient.

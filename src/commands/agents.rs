@@ -85,7 +85,14 @@ pub const KNOWN_AGENTS: &[KnownAgent] = &[
     },
     KnownAgent { label: "Gemini CLI", bin: "gemini", prompt_args: &["-i", "{prompt}"], skills: None, skills_local: None, memory: None },
     KnownAgent { label: "Aider", bin: "aider", prompt_args: &["--message", "{prompt}"], skills: None, skills_local: None, memory: None },
-    KnownAgent { label: "opencode", bin: "opencode", prompt_args: &["run", "{prompt}"], skills: None, skills_local: None, memory: None },
+    KnownAgent {
+        label: "opencode",
+        bin: "opencode",
+        prompt_args: &["run", "{prompt}"],
+        skills: Some(SkillLoc::Project(".opencode/skills")),
+        skills_local: Some(SkillLoc::Home(".config/opencode/skills")),
+        memory: None,
+    },
     KnownAgent { label: "Amp", bin: "amp", prompt_args: &["{prompt}"], skills: None, skills_local: None, memory: None },
     KnownAgent { label: "Goose", bin: "goose", prompt_args: &["run", "-t", "{prompt}"], skills: None, skills_local: None, memory: None },
 ];

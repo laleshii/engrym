@@ -340,6 +340,23 @@ fn install_skills_claude() {
 }
 
 #[test]
+fn install_skills_opencode() {
+    let ws = Workspace::new();
+    let v = ws.run(&["install", "skills", "--agent", "opencode", "--json"]).ok().json();
+    assert_eq!(v["agent"], "opencode");
+    assert!(ws.repo().join(".opencode/skills/engrym/SKILL.md").is_file());
+    assert!(ws.repo().join(".opencode/skills/engrym-bootstrap/SKILL.md").is_file());
+}
+
+#[test]
+fn install_skills_opencode_local_uses_user_global_dir() {
+    let ws = Workspace::new();
+    ws.run(&["install", "skills", "--agent", "opencode", "--local"]).ok();
+    assert!(ws.home().join(".config/opencode/skills/engrym/SKILL.md").is_file());
+    assert!(!ws.repo().join(".opencode").exists());
+}
+
+#[test]
 fn install_skills_unknown_agent_fails() {
     let ws = Workspace::new();
     ws.run(&["install", "skills", "--agent", "nope"]).fail().err_has("unknown agent");

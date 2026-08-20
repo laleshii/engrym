@@ -844,3 +844,349 @@ fn registry_backfills_from_disk_on_first_use() {
     assert!(text.contains("acme/a"), "current repo re-registered:\n{text}");
     assert!(text.contains("acme/b"), "sibling store backfilled from disk:\n{text}");
 }
+
+// --------------------------------------------------------------------------
+// workspaces — several repos side by side under one folder
+// --------------------------------------------------------------------------
+
+/// A folder of clones: `<master>/{api,web}`, each an in-repo KB with one doc,
+/// both indexed. `auth-overview` deliberately exists in both, to exercise the
+/// ambiguity path.
+fn seed_master(ws: &Workspace) -> TempDir {
+    let master = tempdir();
+    for (repo, id, title, body) in [
+        ("api", "auth-overview", "Auth overview", "Sessions use OAuth token refresh in the API."),
+        ("web", "session-handling", "Session handling", "The frontend keeps the OAuth token in memory."),
+        ("web", "auth-overview", "Web auth overview", "The web app's own take on auth."),
+    ] {
+        let dir = master.path().join(repo);
+        if !dir.exists() {
+            fs::create_dir_all(dir.join(".git")).unwrap();
+            ws.run_in(&dir, &["init", "--agent", "none"]).ok();
+        }
+        ws.run_in(
+            &dir,
+            &["new", id, "--title", title, "-a", "1", "--topic", "core/auth", "--body", body],
+        )
+        .ok();
+    }
+    master
+}
+
+#[test]
+fn index_and_search_span_every_repo_under_the_folder() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let root = master.path();
+
+    // One `index` from the parent folder brings every child repo current.
+    let indexed = ws.run_in(root, &["index", "--no-embed", "--json"]).ok().json();
+    let repos: Vec<&str> =
+        indexed["results"].as_array().unwrap().iter().map(|r| r["repo"].as_str().unwrap()).collect();
+    assert_eq!(repos, vec!["api", "web"]);
+
+    // Searching from the parent fans out and groups by the repo that answered.
+    let v = ws.run_in(root, &["search", "OAuth token", "--keyword", "--json"]).ok().json();
+    let groups = v["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2, "both repos should answer: {v}");
+    let names: Vec<&str> = groups.iter().map(|g| g["repo"].as_str().unwrap()).collect();
+    assert!(names.contains(&"api") && names.contains(&"web"), "got {names:?}");
+    // Every hit carries a ref that's directly usable as `engrym show <ref>`.
+    let first = &groups[0]["hits"][0];
+    assert_eq!(
+        first["ref"].as_str().unwrap(),
+        format!("{}:{}", groups[0]["repo"].as_str().unwrap(), first["id"].as_str().unwrap())
+    );
+    assert_eq!(v["workspace"]["repos"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_repo_with_its_own_kb_searches_alone_until_all_is_asked_for() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let api = master.path().join("api");
+    ws.run_in(master.path(), &["index", "--no-embed"]).ok();
+
+    // Inside a repo, nothing changes: the flat, single-KB result shape.
+    let solo = ws.run_in(&api, &["search", "OAuth token", "--keyword", "--json"]).ok().json();
+    assert!(solo.is_array(), "single-repo search must stay an array: {solo}");
+    assert_eq!(solo.as_array().unwrap().len(), 1);
+
+    // `--all` opts into the siblings.
+    let all = ws.run_in(&api, &["search", "--all", "OAuth token", "--keyword", "--json"]).ok().json();
+    assert_eq!(all["groups"].as_array().unwrap().len(), 2, "{all}");
+}
+
+#[test]
+fn documents_in_other_repos_are_addressed_by_a_repo_qualifier() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let root = master.path();
+    ws.run_in(root, &["index", "--no-embed"]).ok();
+
+    // Unique across the workspace → the bare id is enough.
+    let v = ws.run_in(root, &["show", "session-handling", "--json"]).ok().json();
+    assert_eq!(v["repo"], "web");
+
+    // Defined in both repos → we ask rather than guess.
+    ws.run_in(root, &["show", "auth-overview"])
+        .fail()
+        .err_has("exists in 2 repos");
+
+    // The qualifier picks one outright, for `show` and `related` alike.
+    assert_eq!(ws.run_in(root, &["show", "api:auth-overview", "--json"]).ok().json()["title"], "Auth overview");
+    assert_eq!(ws.run_in(root, &["related", "web:auth-overview", "--json"]).ok().json()["title"], "Web auth overview");
+    ws.run_in(root, &["show", "nope:auth-overview"]).fail().err_has("no repo `nope`");
+}
+
+#[test]
+fn topic_groups_the_subtree_by_repo() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let root = master.path();
+    ws.run_in(root, &["index", "--no-embed"]).ok();
+
+    let v = ws.run_in(root, &["topic", "core/auth", "--json"]).ok().json();
+    let groups = v["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2);
+    let web = groups.iter().find(|g| g["repo"] == "web").expect("web group");
+    assert_eq!(web["docs"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn where_and_list_report_the_workspace() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let root = master.path();
+
+    // `where` is a "yes" from the parent folder — engrym does apply here.
+    let w = ws.run_in(root, &["where", "--json"]).ok().json();
+    assert_eq!(w["kb"], true);
+    assert_eq!(w["mode"], "workspace");
+    assert_eq!(w["repos"].as_array().unwrap().len(), 2);
+
+    let l = ws.run_in(root, &["list", "--json"]).ok().json();
+    assert_eq!(l["workspace"]["repos"].as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn commands_that_touch_one_kb_refuse_an_ambiguous_workspace() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let root = master.path();
+    ws.run_in(root, &["index", "--no-embed"]).ok();
+
+    for args in [
+        vec!["lint"],
+        vec!["reset", "--yes"],
+        vec!["rm", "auth-overview", "--force"],
+    ] {
+        ws.run_in(root, &args).fail().err_has("works on one at a time");
+    }
+    // `--repo` still targets one of them.
+    ws.run_in(root, &["lint", "--repo", master.path().join("api").to_str().unwrap()]).ok();
+}
+
+#[test]
+fn a_missing_index_in_one_repo_does_not_sink_the_search() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let root = master.path();
+    // Only `api` gets indexed; `web` has a KB but no index yet.
+    ws.run_in(&master.path().join("api"), &["index", "--no-embed"]).ok();
+
+    let out = ws.run_in(root, &["search", "OAuth token", "--keyword", "--json"]);
+    out.ok().err_has("web skipped");
+    assert_eq!(out.json()["groups"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn a_subdirectory_of_a_repo_is_never_a_workspace_member() {
+    let ws = Workspace::new();
+    ws.seed();
+    ws.run(&["index", "--no-embed"]).ok();
+    // `docs/` sits under a KB but carries none of its own, so searching from the
+    // repo root still resolves to exactly one KB — not a two-member workspace.
+    let v = ws.run(&["search", "OAuth", "--keyword", "--json"]).ok().json();
+    assert!(v.is_array(), "expected the single-KB shape, got {v}");
+}
+
+/// `<root>/org-a/{api,web}` plus a flat `<root>/solo` — the nested grouping a
+/// deeper scan exists for.
+fn seed_org_folders(ws: &Workspace) -> TempDir {
+    let root = tempdir();
+    for path in ["org-a/api", "org-a/web", "org-b/api", "solo"] {
+        let dir = root.path().join(path);
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        ws.run_in(&dir, &["init", "--agent", "none"]).ok();
+        ws.run_in(
+            &dir,
+            &["new", "svc-doc", "--title", "Service doc", "-a", "1", "--topic", "core",
+              "--body", &format!("OAuth token handling in {path}.")],
+        )
+        .ok();
+    }
+    root
+}
+
+#[test]
+fn depth_reaches_repos_grouped_under_an_org_folder() {
+    let ws = Workspace::new();
+    let root_dir = seed_org_folders(&ws);
+    let root = root_dir.path();
+
+    // One level down only sees the flat clone; the org folders are too deep.
+    let shallow = ws.run_in(root, &["where", "--json"]).ok().json();
+    assert_eq!(shallow["repos"].as_array().unwrap().len(), 1);
+    assert_eq!(shallow["repos"][0]["name"], "solo");
+
+    // `--depth 2` reaches them, named by their path so two orgs' `api` don't collide.
+    let deep = ws.run_in(root, &["where", "--depth", "2", "--json"]).ok().json();
+    let names: Vec<&str> =
+        deep["repos"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["org-a/api", "org-a/web", "org-b/api", "solo"]);
+    assert_eq!(deep["depth"], 2);
+
+    // And the whole read surface follows.
+    ws.run_in(root, &["index", "--no-embed", "--depth", "2"]).ok();
+    let hits = ws
+        .run_in(root, &["search", "OAuth token", "--keyword", "--depth", "2", "--json"])
+        .ok()
+        .json();
+    assert_eq!(hits["groups"].as_array().unwrap().len(), 4);
+    assert_eq!(
+        ws.run_in(root, &["show", "org-b/api:svc-doc", "--depth", "2", "--json"]).ok().json()["repo"],
+        "org-b/api"
+    );
+
+    // Without the reach, the qualifier can't resolve — and says why.
+    ws.run_in(root, &["show", "org-b/api:svc-doc"]).fail().err_has("try `--depth 2`");
+}
+
+#[test]
+fn a_deeper_scan_still_never_descends_into_a_repo() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let root = master.path();
+    // A vendored checkout with its own KB, buried inside `api`.
+    let vendored = root.join("api/vendor/lib");
+    fs::create_dir_all(vendored.join(".git")).unwrap();
+    ws.run_in(&vendored, &["init", "--agent", "none"]).ok();
+
+    // Even at full reach, `api` is a repo — the walk stops there, so the
+    // vendored KB is not a sibling of anything.
+    let v = ws.run_in(root, &["where", "--depth", "5", "--json"]).ok().json();
+    let names: Vec<&str> =
+        v["repos"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["api", "web"]);
+}
+
+#[test]
+fn depth_widens_downward_from_a_root_we_never_guess() {
+    let ws = Workspace::new();
+    let root_dir = seed_org_folders(&ws);
+    let root = root_dir.path();
+    ws.run_in(root, &["index", "--no-embed", "--depth", "2"]).ok();
+    let api = root.join("org-a/api");
+
+    // Setting a depth implies `--all`, so this fans out with no extra flag. The
+    // root is the one folder holding the repo — we never walk *up* to guess a
+    // wider one — so it reaches org-a's repos, not org-b's.
+    let v = ws
+        .run_in(&api, &["search", "OAuth token", "--keyword", "--depth", "2", "--json"])
+        .ok()
+        .json();
+    let names: Vec<&str> =
+        v["groups"].as_array().unwrap().iter().map(|g| g["repo"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["api", "web"], "{v}");
+
+    // A wider root is asked for explicitly, never inferred.
+    let all = ws
+        .run_in(
+            &api,
+            &["search", "OAuth token", "--keyword", "--repo", root.to_str().unwrap(), "--depth", "2", "--json"],
+        )
+        .ok()
+        .json();
+    assert_eq!(all["groups"].as_array().unwrap().len(), 4, "{all}");
+}
+
+#[test]
+fn a_repo_without_a_kb_falls_back_to_its_siblings() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let root = master.path();
+    ws.run_in(root, &["index", "--no-embed"]).ok();
+
+    // A plain checkout beside the others, with no engrym of its own. Its own
+    // tree holds nothing, so the folder holding *it* is what we meant.
+    let legacy = root.join("legacy");
+    fs::create_dir_all(legacy.join(".git")).unwrap();
+
+    let v = ws.run_in(&legacy, &["search", "OAuth token", "--keyword", "--json"]).ok().json();
+    assert_eq!(v["groups"].as_array().unwrap().len(), 2, "{v}");
+    assert_eq!(v["workspace"]["depth"], 1, "the fallback doesn't widen the depth");
+
+    // Same from deep inside that repo — the enclosing checkout is what anchors it.
+    let deep = legacy.join("src/lib");
+    fs::create_dir_all(&deep).unwrap();
+    let w = ws.run_in(&deep, &["where", "--json"]).ok().json();
+    assert_eq!(w["mode"], "workspace");
+    assert_eq!(w["repos"].as_array().unwrap().len(), 2);
+
+    // A lone repo with no engrym and no siblings is still a plain "no KB".
+    let empty = tempdir();
+    let alone = empty.path().join("alone");
+    fs::create_dir_all(alone.join(".git")).unwrap();
+    ws.run_in(&alone, &["where"]).fail();
+}
+
+#[test]
+fn where_answers_for_the_same_scope_the_other_commands_resolve() {
+    let ws = Workspace::new();
+    let master = seed_master(&ws);
+    let api = master.path().join("api");
+
+    // Plain: this repo's own KB.
+    assert_eq!(ws.run_in(&api, &["where", "--json"]).ok().json()["mode"], "in-repo");
+
+    // `--all` changes what `search` resolves, so the gate must agree — reporting
+    // one in-repo KB while `search --all` spans the siblings is a lie.
+    let w = ws.run_in(&api, &["where", "--all", "--json"]).ok().json();
+    assert_eq!(w["mode"], "workspace");
+    assert_eq!(w["repos"].as_array().unwrap().len(), 2, "{w}");
+}
+
+#[test]
+fn nested_checkouts_are_members_of_the_repo_that_contains_them() {
+    let ws = Workspace::new();
+    let work = tempdir();
+    // /work/repoA (a checkout, no KB) containing repoB + repoC (both with KBs),
+    // plus a sibling of repoA one level up.
+    let repo_a = work.path().join("repoA");
+    fs::create_dir_all(repo_a.join(".git")).unwrap();
+    for nested in ["repoB", "repoC"] {
+        let dir = repo_a.join(nested);
+        fs::create_dir_all(dir.join(".git")).unwrap();
+        ws.run_in(&dir, &["init", "--agent", "none"]).ok();
+    }
+    let sibling = work.path().join("sibling");
+    fs::create_dir_all(sibling.join(".git")).unwrap();
+    ws.run_in(&sibling, &["init", "--agent", "none"]).ok();
+
+    // From repoA: the nested checkouts are members. Pruning only stops us
+    // descending *into* a checkout — it never stops us adding one.
+    let inside = ws.run_in(&repo_a, &["where", "--json"]).ok().json();
+    let names: Vec<&str> =
+        inside["repos"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["repoB", "repoC"]);
+
+    // From /work: repoA is a checkout, so we never descend into it — the nested
+    // repos stay invisible at *any* depth. Only repoA's sibling shows up.
+    for depth in ["1", "5"] {
+        let above = ws.run_in(work.path(), &["where", "--depth", depth, "--json"]).ok().json();
+        let names: Vec<&str> =
+            above["repos"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+        assert_eq!(names, vec!["sibling"], "at depth {depth}");
+    }
+}

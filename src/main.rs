@@ -13,11 +13,12 @@ mod model;
 mod parse;
 mod registry;
 mod vector;
+mod workspace;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use config::Config;
 use std::path::PathBuf;
+use workspace::Workspace;
 
 #[derive(Parser)]
 #[command(
@@ -34,6 +35,19 @@ struct Cli {
     /// Start the repo search from this directory (defaults to the cwd).
     #[arg(long, global = true, value_name = "DIR")]
     repo: Option<PathBuf>,
+
+    /// Span every KB in the sibling directories too, not just this repo's.
+    /// Read-only commands only; it's implied when the cwd has no KB of its own.
+    #[arg(long, global = true)]
+    all: bool,
+
+    /// How many directory levels below the workspace root to look for KBs
+    /// (default 1). Setting it implies `--all`. The scan never descends into a
+    /// git checkout, so deeper levels only reach groupings like `<org>/<repo>`.
+    /// The root is the cwd (or, inside a repo, its parent) — use `--repo <dir>`
+    /// to scan from somewhere else.
+    #[arg(long, global = true, value_name = "N", value_parser = clap::value_parser!(u8).range(1..=5))]
+    depth: Option<u8>,
 
     #[command(subcommand)]
     command: Command,
@@ -52,7 +66,7 @@ enum Command {
     Search {
         /// The search query.
         query: Vec<String>,
-        /// Maximum number of passages to return.
+        /// Maximum number of passages to return (per repo across a workspace).
         #[arg(short, long, default_value_t = 10)]
         limit: usize,
         /// Restrict to a single altitude level (0=overview … 3=detail).
@@ -310,6 +324,10 @@ fn run() -> Result<()> {
         .repo
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    // Asking for a depth is asking to search wider, so it implies `--all` —
+    // otherwise `--depth 2` from inside a repo would silently do nothing.
+    let depth = cli.depth.unwrap_or(1) as usize;
+    let all = cli.all || cli.depth.is_some();
 
     // `init` and `install` run *before* a config exists, so they can't (and
     // needn't) discover one: `init` scaffolds it, `install` only touches an
@@ -362,16 +380,20 @@ fn run() -> Result<()> {
     // registry regardless of whether a config is present here.
     match cli.command {
         Command::Where => {
-            let present = commands::kb::where_(&start, cli.json)?;
+            let present = commands::kb::where_(&start, all, depth, cli.json)?;
             std::process::exit(if present { 0 } else { 1 });
         }
-        Command::List => return commands::kb::list(cli.json),
+        Command::List => return commands::kb::list(&start, depth, cli.json),
         Command::Link { ref target } => return commands::kb::link(&start, target, cli.json),
         Command::Unlink => return commands::kb::unlink(&start, cli.json),
         _ => {}
     }
 
-    let config = Config::discover(&start)?;
+    // One resolution for every remaining command: the repo's own KB when there
+    // is one, or the KBs of the directories below us when there isn't. Commands
+    // that need exactly one call `ws.only()`.
+    let ws = Workspace::resolve(&start, all, depth)?;
+    let config = ws.only();
 
     match cli.command {
         Command::Init { .. }
@@ -382,9 +404,9 @@ fn run() -> Result<()> {
         | Command::List
         | Command::Link { .. }
         | Command::Unlink => unreachable!("handled above"),
-        Command::Reset { yes } => commands::reset::run(&config, yes, cli.json),
-        Command::Browse { port, open } => commands::browse::run(&config, port, open),
-        Command::Index { no_embed } => commands::index::run(&config, no_embed, cli.json),
+        Command::Reset { yes } => commands::reset::run(config?, yes, cli.json),
+        Command::Browse { port, open } => commands::browse::run(config?, port, open),
+        Command::Index { no_embed } => commands::index::run(&ws, no_embed, cli.json),
         Command::Search {
             query,
             limit,
@@ -405,11 +427,11 @@ fn run() -> Result<()> {
                 altitude,
                 mode,
             };
-            commands::search::run(&config, &args, cli.json)
+            commands::search::run(&ws, &args, cli.json)
         }
-        Command::Topic { path } => commands::topic::run(&config, &path, cli.json),
-        Command::Related { id } => commands::related::run(&config, &id, cli.json),
-        Command::Show { id } => commands::show::run(&config, &id, cli.json),
+        Command::Topic { path } => commands::topic::run(&ws, &path, cli.json),
+        Command::Related { id } => commands::related::run(&ws, &id, cli.json),
+        Command::Show { id } => commands::show::run(&ws, &id, cli.json),
         Command::New {
             id,
             title,
@@ -422,7 +444,7 @@ fn run() -> Result<()> {
             stdin,
             force,
         } => commands::author::new(
-            &config,
+            config?,
             commands::author::NewArgs {
                 id,
                 title,
@@ -448,7 +470,7 @@ fn run() -> Result<()> {
             remove_relations,
             body_stdin,
         } => commands::author::set(
-            &config,
+            config?,
             commands::author::SetArgs {
                 id,
                 title,
@@ -462,22 +484,24 @@ fn run() -> Result<()> {
             },
             cli.json,
         ),
-        Command::Rm { id, force } => commands::author::rm(&config, &id, force, cli.json),
+        Command::Rm { id, force } => commands::author::rm(config?, &id, force, cli.json),
         Command::Relocate { id, layout, dry_run } => {
-            commands::author::relocate(&config, id.as_deref(), layout, dry_run, cli.json)
+            commands::author::relocate(config?, id.as_deref(), layout, dry_run, cli.json)
         }
         Command::Lint { strict } => {
+            let config = config?;
             // `--strict` flag OR `[lint] strict = true` in config.
             let strict = strict || config.lint.strict;
-            let passed = commands::lint::run(&config, strict, cli.json)?;
+            let passed = commands::lint::run(config, strict, cli.json)?;
             if !passed {
                 std::process::exit(1);
             }
             Ok(())
         }
         Command::Serve { idle, stop } => {
+            let config = config?;
             if stop {
-                let stopped = daemon::stop(&config)?;
+                let stopped = daemon::stop(config)?;
                 if cli.json {
                     println!("{}", serde_json::json!({ "stopped": stopped }));
                 } else if stopped {
@@ -487,7 +511,7 @@ fn run() -> Result<()> {
                 }
                 Ok(())
             } else {
-                daemon::serve(&config, idle)
+                daemon::serve(config, idle)
             }
         }
     }

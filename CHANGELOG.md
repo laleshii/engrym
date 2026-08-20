@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-20
+
+### Added
+
+- **Workspace search across sibling repos.** Standing in a folder that holds
+  several clones (`~/Projects/{api,web,jobs}`), `engrym search` now finds every
+  child repo's KB and searches them all, grouping hits under the repo that
+  produced them. Discovery is automatic only where there's nothing to conflict
+  with — a KB reachable by walking *up* from the cwd still wins outright — and
+  the new global `--all` flag asks for the same fan-out from inside a repo, so
+  its siblings join in.
+- `index`, `topic`, `show` and `related` span the workspace too. A document in
+  another repo is addressed with a repo qualifier (`engrym show api:auth-overview`);
+  a bare id still works while it's unambiguous. `--json` hits carry `repo` and a
+  ready-made `ref`.
+- **`--depth <N>`** (global, 1–5) widens the scan for nested layouts like
+  `~/Projects/<org>/<repo>`, and implies `--all`. Members are then named by their
+  path relative to the workspace root (`org-a/api`), so two orgs' `api` stay
+  distinct. The scan stops *descending* at every git checkout — a nested checkout
+  with a KB is still a member, we just never look inside one — so it keeps clear
+  of `node_modules` and `target`, and nested repos are reachable from the
+  directory containing them rather than from further above. Depth widens downward
+  only: the root is the cwd, or inside a repo the one folder holding it, never
+  inferred further up (`--repo <dir>` sets another).
+- **Sibling fallback from a repo that doesn't use engrym.** Standing in a plain
+  checkout (or anywhere inside it) with no KB of its own, engrym now looks at the
+  folder holding it and searches the sibling repos that *do* have KBs, instead of
+  reporting nothing. A different clone of the *same* repo is deliberately
+  excluded — that stays `engrym link`'s job, so `engrym where` still surfaces it
+  as a `link_candidate`.
+- `engrym where` reports `{"mode": "workspace"}` with the repos in scope (and
+  exits zero, so an agent's gate passes in a folder of clones); `engrym list`
+  shows what a workspace search would reach. `where` honours `--all` / `--depth`,
+  so the gate always answers for the scope the other commands resolve.
+
+### Notes
+
+- Single-repo behavior and `--json` output are unchanged. Commands that write to
+  a KB — authoring, `reset`, `lint`, `browse`, `serve` — never fan out; they
+  error with the member list unless exactly one KB is in scope, and `--repo <dir>`
+  picks one.
+
 ## [0.2.2] - 2026-08-10
 
 ### Added
@@ -92,7 +134,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   via RRF), topic/relation/altitude navigation, authoring commands, and
   `engrym browse` (a local web UI).
 
-[Unreleased]: https://github.com/laleshii/engrym/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/laleshii/engrym/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/laleshii/engrym/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/laleshii/engrym/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/laleshii/engrym/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/laleshii/engrym/compare/v0.1.2...v0.2.0

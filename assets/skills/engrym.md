@@ -26,7 +26,19 @@ without one. It may instead report a `link_candidate`: a KB for *this same repo*
 under another clone — mention it, since the user can adopt it with `engrym link`.
 Everything else (`search` / `show` / `topic` / `related`) resolves the KB the
 same way wherever it lives; only when you must read raw files, take the docs root
-from `engrym.toml` rather than assuming `docs/`. If `engrym where` reports
+from `engrym.toml` rather than assuming `docs/`.
+
+`engrym where` may also report `{"mode": "workspace"}` with a list of `repos`:
+either you're in a folder holding several repos each with its own KB, or you're
+in a repo that doesn't use engrym and its siblings do. Either way every query
+spans all of them — hits come back grouped by repo, with a `ref` like
+`api:auth-overview` you can pass straight to `show` / `related`. From *inside*
+one repo only its own KB is queried; add `--all` when the question is genuinely
+cross-service ("how does the web app get its token from the API?"). If the repos
+are grouped a level deeper (`<org>/<repo>`), add `--depth 2` — names are then
+paths like `org-a/api`, and any follow-up needs the same `--depth`. Commands that
+write a document never span repos — `cd` into the right one, or pass
+`--repo <dir>`. If `engrym where` reports
 `skill_outdated`, this skill is behind the installed CLI — tell the user to run
 `engrym install skills --refresh`.
 
@@ -124,8 +136,11 @@ engrym lint --strict     # catches dangling relation targets and topic typos
 ## Guardrails
 
 - **Gate first.** `engrym where` is the source of truth for whether a KB applies
-  here — it resolves worktrees and linked clones — so there's no list of repos
-  to keep updated. Trust it over any remembered set of "engrym repos."
+  here — it resolves worktrees, linked clones, and folders of sibling repos — so
+  there's no list of repos to keep updated. Trust it over any remembered set of
+  "engrym repos."
+- **Stay in one repo unless asked across.** Reach for `--all` only when the
+  question actually spans services; a wider search is noisier, not smarter.
 - **Pull, never block.** One cheap query to orient; skip it when the task is
   clearly unrelated to documented knowledge.
 - **Non-obvious only.** Protect the signal-to-noise of the KB.

@@ -9,13 +9,26 @@
 use super::agents;
 use crate::config::{self, Config};
 use crate::registry::{self, Registry};
+use crate::workspace::Workspace;
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// `engrym where` — report whether a KB is reachable from `start`, and how.
 /// Returns `true` when one is present (the caller maps that to the exit code, so
 /// `engrym where` can gate a skill with a plain `if`).
-pub fn where_(start: &Path, json: bool) -> Result<bool> {
+pub fn where_(start: &Path, all: bool, depth: usize, json: bool) -> Result<bool> {
+    // `--all` changes what the other commands resolve, so the gate has to answer
+    // for the same scope — otherwise `where --all` reports one in-repo KB while
+    // `search --all` spans the siblings.
+    if all {
+        let ws = Workspace::survey(start, depth);
+        if !ws.members.is_empty() {
+            report_workspace(&ws, json)?;
+            return Ok(true);
+        }
+        // Nothing wider to report; fall through to the plain answer.
+    }
+
     // Reuse the real resolver: Ok means a KB is reachable (in-repo or local),
     // Err is precisely the "nothing here" case.
     match Config::discover(start) {
@@ -60,6 +73,15 @@ pub fn where_(start: &Path, json: bool) -> Result<bool> {
             Ok(true)
         }
         Err(_) => {
+            // Nothing above us, but the directories *below* us may each carry
+            // their own KB — a folder of clones. engrym does apply here, so this
+            // is a "yes" for the gate, in workspace mode.
+            let ws = Workspace::survey(start, depth);
+            if !ws.members.is_empty() {
+                report_workspace(&ws, json)?;
+                return Ok(true);
+            }
+
             // No KB here — but a same-identity KB under another clone is a link
             // away, which is exactly what the caller wants to know.
             let anchor = config::repo_anchor(start);
@@ -89,9 +111,26 @@ pub fn where_(start: &Path, json: bool) -> Result<bool> {
     }
 }
 
+fn report_workspace(ws: &Workspace, json: bool) -> Result<()> {
+    if json {
+        let mut v = ws.json();
+        v["kb"] = serde_json::json!(true);
+        v["mode"] = serde_json::json!("workspace");
+        println!("{}", serde_json::to_string_pretty(&v)?);
+    } else {
+        println!("engrym KB: yes (workspace, {} repos)", ws.members.len());
+        println!("  root: {}", ws.root.display());
+        for m in &ws.members {
+            let mode = if m.config.is_local() { "local" } else { "in-repo" };
+            println!("  {} ({mode})", m.name);
+        }
+    }
+    Ok(())
+}
+
 /// `engrym list` — every local KB store on disk, enriched from the registry.
 /// Prunes dead anchors first (self-healing after worktree teardown).
-pub fn list(json: bool) -> Result<()> {
+pub fn list(start: &Path, depth: usize, json: bool) -> Result<()> {
     let mut reg = Registry::load_migrated(); // one-time backfill if never built
     if reg.prune() {
         // drop dead worktree anchors
@@ -120,6 +159,10 @@ pub fn list(json: bool) -> Result<()> {
     }
     stores.sort_by(|a, b| a.key.cmp(&b.key));
 
+    // What a workspace search from here would reach — the answer to "would
+    // `--all` help me?" without having to run it.
+    let ws = Workspace::survey(start, depth);
+
     if json {
         println!(
             "{}",
@@ -129,6 +172,7 @@ pub fn list(json: bool) -> Result<()> {
                     "identity": s.identity,
                     "anchors": s.anchors,
                 })).collect::<Vec<_>>(),
+                "workspace": ws.json(),
             })
         );
         return Ok(());
@@ -136,25 +180,38 @@ pub fn list(json: bool) -> Result<()> {
 
     if stores.is_empty() {
         println!("No local engrym KBs.");
-        return Ok(());
-    }
-    println!("Local engrym KBs ({}):", stores.len());
-    for s in &stores {
-        println!("  {}", s.key);
-        if let Some(id) = &s.identity {
-            println!("    identity: {id}");
-        }
-        match s.anchors.len() {
-            0 => println!("    anchors:  (none recorded)"),
-            _ => {
-                for a in &s.anchors {
-                    println!("    anchor:   {a}");
+    } else {
+        println!("Local engrym KBs ({}):", stores.len());
+        for s in &stores {
+            println!("  {}", s.key);
+            if let Some(id) = &s.identity {
+                println!("    identity: {id}");
+            }
+            match s.anchors.len() {
+                0 => println!("    anchors:  (none recorded)"),
+                _ => {
+                    for a in &s.anchors {
+                        println!("    anchor:   {a}");
+                    }
                 }
             }
         }
     }
+
+    if ws.members.len() > 1 {
+        println!("\nWorkspace under {} ({} KBs):", ws.root.display(), ws.members.len());
+        for m in &ws.members {
+            let mode = if m.config.is_local() { "local" } else { "in-repo" };
+            println!("  {} ({mode}) — {}", m.name, m.repo.display());
+        }
+        println!(
+            "  Search them all with `engrym search --all{} <query>`.",
+            ws.reach_flags()
+        );
+    }
     Ok(())
 }
+
 
 struct StoreView {
     key: String,

@@ -20,6 +20,10 @@ summary: 'The command surface: index, search, topic, related, show, lint, serve,
 - `index` — (re)build the index (`src/commands/index.rs`).
 - `search` — hybrid passage retrieval (see [[hybrid-search]]).
 - `topic` / `related` / `show` — navigate the graph.
+- `--all` (global) spans every KB in the sibling directories; see
+  [[workspace-search]]. It is implied when the cwd has no KB of its own.
+  `--depth <N>` (global, 1–5) widens that scan to nested `<org>/<repo>` layouts
+  and implies `--all`.
 - `browse` — a local web server (`src/commands/browse.rs`) that renders docs as
   HTML, rewrites `[[wikilinks]]` to links, and shows related / same-altitude /
   same-topic panels. Server-rendered (no JS); only new dep is `tiny_http`.
@@ -43,3 +47,8 @@ summary: 'The command surface: index, search, topic, related, show, lint, serve,
 `deinit` must work even when it's already gone, so it does its own *optional*
 discovery). `reset` runs *after* discovery — it operates on the KB that resolves
 for the current repo, in-repo or local.
+
+Everything after that dispatch resolves through `Workspace::resolve` rather than
+`Config::discover`: one KB when the cwd has one, or every KB in the directories
+below when it doesn't ([[workspace-search]]). Commands that need exactly one call
+`Workspace::only`, which errors with the member list instead of fanning out.

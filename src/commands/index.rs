@@ -12,6 +12,7 @@ use crate::embed::Embedder;
 use crate::model::{Frontmatter, MAX_ALTITUDE};
 use crate::parse::{self, ParsedDoc};
 use crate::vector;
+use crate::workspace::Workspace;
 use anyhow::{anyhow, bail, Result};
 use rusqlite::{params, Connection};
 use sha2::{Digest, Sha256};
@@ -20,7 +21,69 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
-pub fn run(config: &Config, no_embed: bool, json: bool) -> Result<()> {
+/// Rebuild every index in scope. In a workspace that's one pass per repo, so
+/// `engrym index` from the folder holding your clones brings them all current.
+pub fn run(ws: &Workspace, no_embed: bool, json: bool) -> Result<()> {
+    if !ws.spans_repos {
+        let config = ws.only()?;
+        let stats = build(config, no_embed)?;
+        report(&stats, config, no_embed, json);
+        return Ok(());
+    }
+
+    let mut reports = Vec::new();
+    let mut failed = 0usize;
+    for member in &ws.members {
+        if !json {
+            println!("\x1b[1;36m{}\x1b[0m", member.name);
+        }
+        // One broken repo (missing docs root, unreadable index) shouldn't stop
+        // the rest of the workspace from being rebuilt.
+        match build(&member.config, no_embed) {
+            Ok(stats) => {
+                if json {
+                    let mut v = stats_json(&stats, &member.config, no_embed);
+                    v["repo"] = serde_json::json!(member.name);
+                    reports.push(v);
+                } else {
+                    report(&stats, &member.config, no_embed, false);
+                    println!();
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                if json {
+                    reports.push(serde_json::json!({
+                        "repo": member.name,
+                        "error": format!("{e:#}"),
+                    }));
+                } else {
+                    eprintln!("\x1b[33mwarning:\x1b[0m {} skipped ({:#})\n", member.name, e);
+                }
+            }
+        }
+    }
+
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "workspace": ws.json(),
+                "results": reports,
+            }))?
+        );
+    } else {
+        println!(
+            "Indexed {} of {} KB(s) under {}.",
+            ws.members.len() - failed,
+            ws.members.len(),
+            ws.root.display()
+        );
+    }
+    Ok(())
+}
+
+fn build(config: &Config, no_embed: bool) -> Result<Stats> {
     let docs_root = config.docs_root();
     if !docs_root.is_dir() {
         bail!(
@@ -98,8 +161,7 @@ pub fn run(config: &Config, no_embed: bool, json: bool) -> Result<()> {
         set_meta(&conn, "embed_dim", "0")?;
     }
 
-    report(&stats, config, no_embed, json);
-    Ok(())
+    Ok(stats)
 }
 
 /// Embed every chunk, reusing cached vectors for unchanged passage text.
@@ -343,19 +405,25 @@ struct Stats {
     skipped: Vec<String>,
 }
 
+fn stats_json(stats: &Stats, config: &Config, no_embed: bool) -> serde_json::Value {
+    serde_json::json!({
+        "indexed": stats.indexed,
+        "chunks": stats.chunks,
+        "embedded_new": stats.embedded_new,
+        "embedded_cached": stats.embedded_cached,
+        "embeddings": !no_embed,
+        "skipped": stats.skipped,
+        "index_path": config.index_path().to_string_lossy(),
+        "local": config.is_local(),
+    })
+}
+
 fn report(stats: &Stats, config: &Config, no_embed: bool, json: bool) {
     if json {
-        let out = serde_json::json!({
-            "indexed": stats.indexed,
-            "chunks": stats.chunks,
-            "embedded_new": stats.embedded_new,
-            "embedded_cached": stats.embedded_cached,
-            "embeddings": !no_embed,
-            "skipped": stats.skipped,
-            "index_path": config.index_path().to_string_lossy(),
-            "local": config.is_local(),
-        });
-        println!("{}", serde_json::to_string_pretty(&out).unwrap());
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&stats_json(stats, config, no_embed)).unwrap()
+        );
     } else {
         println!(
             "Indexed {} document(s), {} chunk(s) → {}",

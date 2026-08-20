@@ -96,6 +96,8 @@ is typed literally.
 | `engrym init [--local] [--docs <dir>]` | Scaffold a repo and hand off to an agent |
 | `engrym index [--no-embed]` | (Re)build the index |
 | `engrym search <query> [--keyword\|--semantic] [--altitude <n>]` | Retrieve passages |
+| `--all` (global) | Span every KB in the sibling directories, not just this repo's |
+| `--depth <N>` (global) | Look N levels down for KBs (default 1); implies `--all` |
 | `engrym topic <path>` | List documents under a topic |
 | `engrym related <id>` | Show a document's graph neighborhood |
 | `engrym show <id>` | Print a document |
@@ -110,6 +112,46 @@ is typed literally.
 | `engrym uninstall <skills\|memory>` | Inverse of `install` |
 | `engrym reset` | Delete the KB's documents + index (keeps config) |
 | `engrym deinit` | Remove engrym from the repo entirely (inverse of `init`) |
+
+## Several repos at once
+
+A machine is usually a folder of clones. Stand in it and engrym searches them
+all, grouping hits under the repo that answered:
+
+```bash
+cd ~/Projects            # api/, web/, jobs/ — each its own repo with its own KB
+engrym search "how do we refresh OAuth tokens"
+
+# 3 match(es) across 2 of 3 KB(s) under /Users/me/Projects:
+#
+# api  (2 match(es))
+#   auth-overview › Token refresh  (alt 1)
+#     …
+#
+# web  (1 match(es))
+#   session-handling  (alt 2)
+#     …
+
+engrym show api:auth-overview        # a repo qualifier addresses one directly
+```
+
+Clones grouped one level deeper (`~/Projects/<org>/<repo>`) need `--depth 2`;
+members are then named by their relative path, so `org-a/api` and `org-b/api`
+stay distinct. The scan stops at every git checkout — repos sit beside each
+other, never inside one another — so it never walks a `node_modules` or `target`,
+and it only widens *downward* from where you are (`--repo <dir>` sets a different
+root).
+
+Standing in a repo that doesn't use engrym works too: with nothing of its own to
+find, engrym looks at the folder holding it and searches the siblings that do
+have KBs. (A different clone of the *same* repo is left alone — that's what
+`engrym link` is for.)
+
+A repo's own KB always wins when you're inside it — the fan-out only kicks in
+where there's nothing to conflict with. `--all` asks for it explicitly from
+inside a repo, so siblings join in. `index`, `topic`, `show` and `related` span
+the workspace the same way; anything that *writes* to a KB stays repo-local, and
+`engrym where` / `engrym list` report which repos are in scope.
 
 ## Data model
 

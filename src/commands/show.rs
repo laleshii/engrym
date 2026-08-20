@@ -1,14 +1,18 @@
 //! `engrym show <id>` — print a document.
 //!
 //! Default prints the raw Markdown file (full fidelity for a human). `--json`
-//! returns structured metadata + body for an agent.
+//! returns structured metadata + body for an agent. Across a workspace the
+//! reference may be qualified (`api:auth-overview`) to pick the repo.
 
-use crate::config::Config;
 use crate::db;
+use crate::workspace::Workspace;
 use anyhow::{bail, Result};
 use rusqlite::{params, OptionalExtension};
 
-pub fn run(config: &Config, id: &str, json: bool) -> Result<()> {
+pub fn run(ws: &Workspace, reference: &str, json: bool) -> Result<()> {
+    let (member, id) = ws.resolve_doc(reference)?;
+    let id = id.as_str();
+    let config = &member.config;
     let conn = db::open_existing(&config.index_path())?;
 
     let row = conn
@@ -41,6 +45,7 @@ pub fn run(config: &Config, id: &str, json: bool) -> Result<()> {
             .collect::<rusqlite::Result<_>>()?;
 
         let out = serde_json::json!({
+            "repo": member.name,
             "id": id,
             "title": title,
             "altitude": altitude,

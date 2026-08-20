@@ -11,6 +11,7 @@ use crate::daemon;
 use crate::db;
 use crate::embed::Embedder;
 use crate::vector;
+use crate::workspace::Workspace;
 use anyhow::Result;
 use rusqlite::params;
 use std::collections::HashMap;
@@ -29,10 +30,70 @@ pub struct Args {
     pub mode: Mode,
 }
 
-pub fn run(config: &Config, args: &Args, json: bool) -> Result<()> {
+/// Search every KB in scope. One repo behaves exactly as it always has; a
+/// workspace searches each member and groups the hits under the repo that
+/// produced them, so you can see *which* service the answer came from.
+pub fn run(ws: &Workspace, args: &Args, json: bool) -> Result<()> {
+    let mut vectors = QueryVectors::default();
+    let mut groups: Vec<Group> = Vec::new();
+
+    for member in &ws.members {
+        let label = ws.spans_repos.then_some(member.name.as_str());
+        match search_one(&member.config, args, &mut vectors, label) {
+            Ok(hits) => groups.push(Group {
+                repo: member.name.clone(),
+                path: member.repo.display().to_string(),
+                hits,
+            }),
+            // A sibling with no index yet shouldn't sink the whole search — say
+            // so and carry on. On a single KB the error is the answer.
+            Err(e) => {
+                if !ws.spans_repos {
+                    return Err(e);
+                }
+                eprintln!("\x1b[33mwarning:\x1b[0m {} skipped ({:#})", member.name, e);
+            }
+        }
+    }
+
+    groups.retain(|g| !g.hits.is_empty());
+    // Best-scoring repo first. Scores from separate indexes aren't strictly
+    // comparable, so this orders the groups but never interleaves them.
+    groups.sort_by(|a, b| {
+        b.best().partial_cmp(&a.best()).unwrap_or(std::cmp::Ordering::Equal).then(a.repo.cmp(&b.repo))
+    });
+
+    if ws.spans_repos {
+        render_workspace(ws, args, &groups, json)
+    } else {
+        render_single(args, groups.first().map(|g| g.hits.as_slice()).unwrap_or(&[]), json)
+    }
+}
+
+struct Group {
+    repo: String,
+    path: String,
+    hits: Vec<Hit>,
+}
+
+impl Group {
+    fn best(&self) -> f64 {
+        self.hits.first().map(|h| h.score).unwrap_or(0.0)
+    }
+}
+
+/// Rank one KB's passages. `label` names the repo in warnings when several are
+/// in play, so "no embeddings" points at the repo that needs indexing.
+fn search_one(
+    config: &Config,
+    args: &Args,
+    vectors: &mut QueryVectors,
+    label: Option<&str>,
+) -> Result<Vec<Hit>> {
     let conn = db::open_existing(&config.index_path())?;
     let pool = (args.limit * 5).max(50);
     let has_vectors = embedded_dim(&conn).unwrap_or(0) > 0;
+    let tag = label.map(|l| format!("{l}: ")).unwrap_or_default();
 
     // Resolve the effective ranker set, degrading semantic→keyword when the
     // index isn't embedded.
@@ -41,8 +102,8 @@ pub fn run(config: &Config, args: &Args, json: bool) -> Result<()> {
         Mode::Semantic => {
             if !has_vectors {
                 eprintln!(
-                    "\x1b[33mwarning:\x1b[0m index has no embeddings; falling back to keyword search. \
-                     Run `engrym index` to enable semantic search."
+                    "\x1b[33mwarning:\x1b[0m {tag}index has no embeddings; falling back to keyword \
+                     search. Run `engrym index` to enable semantic search."
                 );
                 (true, false)
             } else {
@@ -57,47 +118,126 @@ pub fn run(config: &Config, args: &Args, json: bool) -> Result<()> {
         ranked_lists.push(keyword_rank(&conn, &args.query, pool)?);
     }
     if use_vector {
-        match vector_rank(&conn, config, &args.query, pool) {
+        match vectors.get(config, &args.query).and_then(|q| vector_rank(&conn, &q, pool)) {
             Ok(list) => ranked_lists.push(list),
             Err(e) => eprintln!(
-                "\x1b[33mwarning:\x1b[0m semantic ranking skipped ({:#}); using keyword results.",
+                "\x1b[33mwarning:\x1b[0m {tag}semantic ranking skipped ({:#}); using keyword results.",
                 e
             ),
         }
     }
 
     let fused = rrf_fuse(&ranked_lists, config.search.rrf_k);
-    let hits = materialize(&conn, &fused, args.limit, args.altitude)?;
+    materialize(&conn, &fused, args.limit, args.altitude)
+}
 
+fn render_single(args: &Args, hits: &[Hit], json: bool) -> Result<()> {
     if json {
-        let arr: Vec<_> = hits
-            .iter()
-            .map(|h| {
-                serde_json::json!({
-                    "id": h.id,
-                    "title": h.title,
-                    "heading": h.heading,
-                    "altitude": h.altitude,
-                    "score": h.score,
-                    "passage": h.text,
-                })
-            })
-            .collect();
+        let arr: Vec<_> = hits.iter().map(hit_json).collect();
         println!("{}", serde_json::to_string_pretty(&arr)?);
     } else if hits.is_empty() {
         println!("No matches for \"{}\".", args.query);
     } else {
-        for h in &hits {
-            let loc = match &h.heading {
-                Some(hd) if !hd.is_empty() => format!("{} › {}", h.id, hd),
-                _ => h.id.clone(),
-            };
-            println!("\x1b[1m{}\x1b[0m  (alt {})", loc, h.altitude);
-            println!("  {}", snippet(&h.text, 220));
-            println!();
+        for h in hits {
+            print_hit(h, "");
         }
     }
     Ok(())
+}
+
+fn render_workspace(ws: &Workspace, args: &Args, groups: &[Group], json: bool) -> Result<()> {
+    if json {
+        let out = serde_json::json!({
+            "workspace": ws.json(),
+            "groups": groups.iter().map(|g| serde_json::json!({
+                "repo": g.repo,
+                "path": g.path,
+                "hits": g.hits.iter().map(|h| {
+                    let mut v = hit_json(h);
+                    v["repo"] = serde_json::json!(g.repo);
+                    // Directly usable as `engrym show <ref>` / `engrym related <ref>`.
+                    v["ref"] = serde_json::json!(format!("{}:{}", g.repo, h.id));
+                    v
+                }).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    if groups.is_empty() {
+        println!(
+            "No matches for \"{}\" in any of the {} KB(s) within {} level(s) of {}.",
+            args.query,
+            ws.members.len(),
+            ws.depth,
+            ws.root.display()
+        );
+        return Ok(());
+    }
+
+    let total: usize = groups.iter().map(|g| g.hits.len()).sum();
+    println!(
+        "{} match(es) across {} of {} KB(s) under {}:\n",
+        total,
+        groups.len(),
+        ws.members.len(),
+        ws.root.display()
+    );
+    for g in groups {
+        println!("\x1b[1;36m{}\x1b[0m \x1b[2m({} match(es))\x1b[0m", g.repo, g.hits.len());
+        for h in &g.hits {
+            print_hit(h, "  ");
+        }
+    }
+    let first = &groups[0];
+    println!(
+        "\x1b[2mOpen one with `engrym show {}:{}{}`.\x1b[0m",
+        first.repo,
+        first.hits[0].id,
+        ws.reach_flags()
+    );
+    Ok(())
+}
+
+fn print_hit(h: &Hit, indent: &str) {
+    let loc = match &h.heading {
+        Some(hd) if !hd.is_empty() => format!("{} › {}", h.id, hd),
+        _ => h.id.clone(),
+    };
+    println!("{indent}\x1b[1m{}\x1b[0m  (alt {})", loc, h.altitude);
+    println!("{indent}  {}", snippet(&h.text, 220));
+    println!();
+}
+
+fn hit_json(h: &Hit) -> serde_json::Value {
+    serde_json::json!({
+        "id": h.id,
+        "title": h.title,
+        "heading": h.heading,
+        "altitude": h.altitude,
+        "score": h.score,
+        "passage": h.text,
+    })
+}
+
+/// Query embeddings, cached by model name. Every KB in a workspace usually
+/// shares one model, so this embeds the query *once* for the whole fan-out
+/// rather than paying a daemon round-trip (or a model load) per repo.
+#[derive(Default)]
+struct QueryVectors {
+    by_model: HashMap<String, Vec<f32>>,
+}
+
+impl QueryVectors {
+    fn get(&mut self, config: &Config, query: &str) -> Result<Vec<f32>> {
+        if let Some(v) = self.by_model.get(&config.embedding.model) {
+            return Ok(v.clone());
+        }
+        let v = query_embedding(config, query)?;
+        self.by_model.insert(config.embedding.model.clone(), v.clone());
+        Ok(v)
+    }
 }
 
 /// BM25 ranking → chunk ids, best first.
@@ -114,14 +254,7 @@ fn keyword_rank(conn: &rusqlite::Connection, query: &str, pool: usize) -> Result
 
 /// Cosine ranking → chunk ids, best first. Brute-force over all embedded chunks
 /// (microsecond-fast for a repo's worth of passages).
-fn vector_rank(
-    conn: &rusqlite::Connection,
-    config: &Config,
-    query: &str,
-    pool: usize,
-) -> Result<Vec<i64>> {
-    let qvec = query_embedding(config, query)?;
-
+fn vector_rank(conn: &rusqlite::Connection, qvec: &[f32], pool: usize) -> Result<Vec<i64>> {
     let mut stmt = conn.prepare("SELECT id, embedding FROM chunks WHERE embedding IS NOT NULL")?;
     let mut scored: Vec<(i64, f32)> = stmt
         .query_map([], |r| {
@@ -132,7 +265,7 @@ fn vector_rank(
         .filter_map(|res| res.ok())
         .map(|(id, bytes)| {
             let v = vector::from_bytes(&bytes);
-            (id, vector::dot(&qvec, &v))
+            (id, vector::dot(qvec, &v))
         })
         .collect();
 

@@ -192,6 +192,30 @@ impl Config {
         );
     }
 
+    /// Load the KB anchored *exactly* at `dir`, never walking up to a parent.
+    ///
+    /// This is what workspace scanning needs. `discover` climbs, which is right
+    /// when you're standing inside a repo but wrong when you're inspecting a
+    /// candidate: every subdirectory of a repo would "have" that repo's KB and
+    /// every sibling clone would look like a member of its parent folder's.
+    /// A directory qualifies only if it holds `engrym.toml` itself, or is a git
+    /// checkout with a local store bound to it.
+    pub fn discover_here(dir: &Path) -> Option<Config> {
+        let in_repo = dir.join(CONFIG_FILENAME);
+        if in_repo.is_file() {
+            return Self::load(&in_repo, None).ok();
+        }
+        if !dir.join(".git").exists() {
+            return None;
+        }
+        let anchor = repo_anchor(dir);
+        let config_path = local_project_dir(&anchor)?.join(CONFIG_FILENAME);
+        if !config_path.is_file() {
+            return None;
+        }
+        Self::load(&config_path, Some(anchor)).ok()
+    }
+
     fn load(config_path: &Path, source_repo: Option<PathBuf>) -> Result<Config> {
         let text = std::fs::read_to_string(config_path)
             .with_context(|| format!("reading {}", config_path.display()))?;
@@ -209,6 +233,12 @@ impl Config {
     /// Whether this KB is stored externally (local mode) rather than in the repo.
     pub fn is_local(&self) -> bool {
         self.source_repo.is_some()
+    }
+
+    /// The code repo this KB describes: the state root itself in-repo, or the
+    /// checkout the external store is bound to in local mode.
+    pub fn repo(&self) -> &Path {
+        self.source_repo.as_deref().unwrap_or(&self.repo_root)
     }
 
     /// Absolute path to the docs root directory.

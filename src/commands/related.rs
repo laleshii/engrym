@@ -4,13 +4,15 @@
 //! doc), grouped by relation type. Inbound `refines`/`part_of` answers "what
 //! elaborates this overview?"; that's the abstract→specific drill-down axis.
 
-use crate::config::Config;
 use crate::db;
+use crate::workspace::Workspace;
 use anyhow::{bail, Result};
 use rusqlite::{params, OptionalExtension};
 
-pub fn run(config: &Config, id: &str, json: bool) -> Result<()> {
-    let conn = db::open_existing(&config.index_path())?;
+pub fn run(ws: &Workspace, reference: &str, json: bool) -> Result<()> {
+    let (member, id) = ws.resolve_doc(reference)?;
+    let id = id.as_str();
+    let conn = db::open_existing(&member.config.index_path())?;
 
     let title: Option<String> = conn
         .query_row("SELECT title FROM docs WHERE id = ?1", params![id], |r| {
@@ -45,6 +47,7 @@ pub fn run(config: &Config, id: &str, json: bool) -> Result<()> {
 
     if json {
         let out = serde_json::json!({
+            "repo": member.name,
             "id": id,
             "title": title,
             "outbound": edges_json(&outbound),
@@ -52,6 +55,9 @@ pub fn run(config: &Config, id: &str, json: bool) -> Result<()> {
         });
         println!("{}", serde_json::to_string_pretty(&out)?);
     } else {
+        if ws.spans_repos {
+            println!("\x1b[2min {}\x1b[0m", member.name);
+        }
         println!("\x1b[1m{}\x1b[0m — {}", id, title.unwrap_or_default());
         print_group("Outbound (this → target)", &outbound, true);
         print_group("Inbound (source → this)", &inbound, false);

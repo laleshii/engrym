@@ -536,6 +536,13 @@ fn browse_serves_rendered_docs_with_connections() {
     assert!(doc.contains("/doc/overview"), "link to related doc missing");
     // The index lists docs.
     assert!(index.contains("Knowledge base") && index.contains("/doc/auth"), "{index}");
+    // Theme toggle: the control plus both dark layers (OS-driven and explicit).
+    assert!(index.contains("id=theme"), "theme toggle missing:\n{index}");
+    assert!(
+        index.contains("prefers-color-scheme:dark){:root:not([data-theme=light])")
+            && index.contains(":root[data-theme=dark]{"),
+        "dark theme rules missing:\n{index}"
+    );
 }
 
 /// Minimal HTTP/1.0 GET (server closes the connection, so read to EOF), retried

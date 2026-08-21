@@ -1,11 +1,12 @@
 //! `engrym browse` — a local web server for reading and navigating the KB.
 //!
-//! Server-rendered HTML, no JS: each document is rendered from its Markdown
+//! Server-rendered HTML: each document is rendered from its Markdown
 //! (via pulldown-cmark, already a dependency), `[[wikilinks]]` become real
 //! links, and a side panel surfaces the graph — typed relations (in/out),
 //! same-altitude docs, and same-topic docs — all clickable. Reads source files
 //! per request, so edits show on refresh. Everything else (the graph, topics)
-//! comes from the SQLite index, exactly like `related`/`topic`/`search`.
+//! comes from the SQLite index, exactly like `related`/`topic`/`search`. The
+//! only script is the theme toggle, and it degrades to the OS preference.
 
 use crate::config::Config;
 use crate::db;
@@ -261,12 +262,14 @@ fn page(config: &Config, current: Option<&str>, title: &str, main: &str) -> Stri
     format!(
         "<!doctype html><html lang=en><head><meta charset=utf-8>\
          <meta name=viewport content=\"width=device-width,initial-scale=1\">\
-         <title>{} · engrym</title><style>{}</style></head><body>\
-         <header class=topbar><a href=/ class=brand>engrym</a>\
+         <title>{} · engrym</title><style>{}</style>{}</head><body>\
+         <header class=topbar><a href=/ class=brand>engrym</a>{}\
          <form action=/search class=search><input name=q placeholder=search></form></header>\
          <div class=layout><nav>{}</nav><section class=content>{}</section></div></body></html>",
         esc(title),
         CSS,
+        THEME_SCRIPT,
+        THEME_BUTTON,
         sidebar,
         main
     )
@@ -617,14 +620,49 @@ fn open_browser(url: &str) {
     let _ = std::process::Command::new(cmd).arg(url).spawn();
 }
 
+/// Runs in `<head>`, before the body paints, so a stored choice never flashes
+/// the other theme. "auto" is the absence of `data-theme`, which leaves the
+/// `prefers-color-scheme` rules in charge.
+const THEME_SCRIPT: &str = r#"<script>
+(function(){
+  var root=document.documentElement,key='engrym-theme',modes=['auto','light','dark'];
+  function label(m){return 'Theme: '+m+' (click to change)'}
+  function apply(m,save){
+    if(m==='auto'){root.removeAttribute('data-theme')}else{root.setAttribute('data-theme',m)}
+    if(save){try{m==='auto'?localStorage.removeItem(key):localStorage.setItem(key,m)}catch(e){}}
+    var b=document.getElementById('theme');
+    if(b){b.setAttribute('title',label(m));b.setAttribute('aria-label',label(m))}
+  }
+  var stored;
+  try{stored=localStorage.getItem(key)}catch(e){}
+  apply(modes.indexOf(stored)>0?stored:'auto',false);
+  // The button doesn't exist yet at head time, so label it once it does.
+  document.addEventListener('DOMContentLoaded',function(){apply(root.getAttribute('data-theme')||'auto',false)});
+  document.addEventListener('click',function(e){
+    if(!e.target.closest||!e.target.closest('#theme'))return;
+    var cur=root.getAttribute('data-theme')||'auto';
+    apply(modes[(modes.indexOf(cur)+1)%modes.length],true);
+  });
+})()
+</script>"#;
+
+/// All three icons ship in the markup; CSS reveals the one matching the mode.
+const THEME_BUTTON: &str = concat!(
+    r#"<button id=theme class=themebtn type=button title="Theme: auto (click to change)" aria-label="Theme: auto (click to change)">"#,
+    r#"<svg class=i-auto viewBox="0 0 24 24" aria-hidden=true><circle cx=12 cy=12 r=8.25 /><path d="M12 3.75a8.25 8.25 0 0 0 0 16.5Z" fill=currentColor stroke=none /></svg>"#,
+    r#"<svg class=i-light viewBox="0 0 24 24" aria-hidden=true><circle cx=12 cy=12 r=4.25 /><path d="M12 2.5v2M12 19.5v2M2.5 12h2M19.5 12h2M5.3 5.3l1.4 1.4M17.3 17.3l1.4 1.4M18.7 5.3l-1.4 1.4M6.7 17.3l-1.4 1.4"/></svg>"#,
+    r#"<svg class=i-dark viewBox="0 0 24 24" aria-hidden=true><path d="M20.5 14.6A8.5 8.5 0 1 1 9.4 3.5a6.9 6.9 0 0 0 11.1 11.1Z"/></svg>"#,
+    r#"</button>"#,
+);
+
 const CSS: &str = "\
-:root{--fg:#1c1c1e;--muted:#6b6b70;--line:#e4e4e7;--bg:#fff;--accent:#3b5bdb;--soft:#f6f6f7}
+:root{color-scheme:light dark;--fg:#1c1c1e;--muted:#6b6b70;--line:#e4e4e7;--bg:#fff;--accent:#3b5bdb;--soft:#f6f6f7;--danger:#b42318;--a0bg:#e7f0ff;--a0fg:#1f4fd6;--a1bg:#e9f7ee;--a1fg:#1f9254;--a2bg:#fff4e6;--a2fg:#c2750a;--a3bg:#f3eefc;--a3fg:#7a45c9}
 *{box-sizing:border-box}
 body{margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:var(--fg);background:var(--bg)}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
 .topbar{display:flex;align-items:center;gap:1rem;padding:.6rem 1.2rem;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--bg);z-index:1}
 .brand{font-weight:700;font-size:1.05rem;color:var(--fg)}
-.search{margin-left:auto}.search input,form input{padding:.35rem .6rem;border:1px solid var(--line);border-radius:6px;font:inherit;min-width:16rem}
+.search{margin-left:auto}.search input,form input{padding:.35rem .6rem;border:1px solid var(--line);border-radius:6px;font:inherit;min-width:16rem;background:var(--bg);color:var(--fg)}
 .layout{display:grid;grid-template-columns:16rem 1fr;align-items:start}
 nav{position:sticky;top:3rem;max-height:calc(100vh - 3rem);overflow:auto;padding:1rem;border-right:1px solid var(--line)}
 nav h3{font-size:.72rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin:1rem 0 .3rem}
@@ -655,11 +693,22 @@ aside{position:sticky;top:4rem;font-size:.9rem;line-height:1.45}
 .egroup{margin:0 0 .7rem}
 .etype{display:block;font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);margin-bottom:.1rem}
 .panel ul{list-style:none;margin:0;padding:0}.panel li{padding:.15rem 0}
-.dangling{color:#b42318}
+.dangling{color:var(--danger)}
 .meta{margin-bottom:1rem;display:flex;flex-wrap:wrap;gap:.3rem}
 .badge,.topic{font-size:.72rem;padding:.1rem .5rem;border-radius:999px;background:var(--soft);color:var(--muted)}
-.badge.alt0{background:#e7f0ff;color:#1f4fd6}.badge.alt1{background:#e9f7ee;color:#1f9254}
-.badge.alt2{background:#fff4e6;color:#c2750a}.badge.alt3{background:#f3eefc;color:#7a45c9}
+.badge.alt0{background:var(--a0bg);color:var(--a0fg)}.badge.alt1{background:var(--a1bg);color:var(--a1fg)}
+.badge.alt2{background:var(--a2bg);color:var(--a2fg)}.badge.alt3{background:var(--a3bg);color:var(--a3fg)}
+/* Auto (no data-theme) follows the OS; [data-theme] is the explicit override.
+   Keep the two dark token lists in sync — a media query can't share a rule. */
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--fg:#e7e7ea;--muted:#9b9ba4;--line:#2d2d33;--bg:#16161a;--accent:#8fa8ff;--soft:#202026;--danger:#ff8a80;--a0bg:#1b2748;--a0fg:#a6bcff;--a1bg:#15301f;--a1fg:#7ad498;--a2bg:#38280f;--a2fg:#e8ab5c;--a3bg:#2a2140;--a3fg:#c39bf0}}
+:root[data-theme=dark]{color-scheme:dark;--fg:#e7e7ea;--muted:#9b9ba4;--line:#2d2d33;--bg:#16161a;--accent:#8fa8ff;--soft:#202026;--danger:#ff8a80;--a0bg:#1b2748;--a0fg:#a6bcff;--a1bg:#15301f;--a1fg:#7ad498;--a2bg:#38280f;--a2fg:#e8ab5c;--a3bg:#2a2140;--a3fg:#c39bf0}
+:root[data-theme=light]{color-scheme:light}
+.themebtn{display:inline-flex;align-items:center;justify-content:center;width:1.85rem;height:1.85rem;margin-left:-.5rem;padding:0;border:1px solid var(--line);border-radius:6px;background:none;color:var(--muted);cursor:pointer}
+.themebtn:hover{color:var(--fg);border-color:var(--muted)}
+.themebtn svg{display:none;width:1.05rem;height:1.05rem;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+:root:not([data-theme]) .themebtn .i-auto{display:block}
+:root[data-theme=light] .themebtn .i-light{display:block}
+:root[data-theme=dark] .themebtn .i-dark{display:block}
 @media(max-width:900px){.layout{grid-template-columns:1fr}nav{display:none}article{grid-template-columns:1fr}aside{position:static}}
 ";
 

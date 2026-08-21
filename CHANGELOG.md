@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-21
+
+### Added
+
+- **Dark mode in `engrym browse`.** The web UI now has a light and a dark
+  palette, and follows the operating system's appearance setting out of the box.
+  Code blocks, tables, the relation panels and the altitude badges all get their
+  own dark tints rather than reusing the light pastels, which glared against a
+  dark page.
+- **A theme toggle next to the title**, cycling auto → light → dark. The choice
+  is remembered per browser in `localStorage` and applied in `<head>` before the
+  page paints, so a stored preference never flashes the other theme. "Auto" is
+  stored as the *absence* of a preference, so it keeps tracking the OS rather
+  than freezing whatever it was when you picked it.
+
 ## [0.3.0] - 2026-08-20
 
 ### Added
@@ -134,7 +149,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   via RRF), topic/relation/altitude navigation, authoring commands, and
   `engrym browse` (a local web UI).
 
-[Unreleased]: https://github.com/laleshii/engrym/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/laleshii/engrym/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/laleshii/engrym/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/laleshii/engrym/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/laleshii/engrym/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/laleshii/engrym/compare/v0.2.0...v0.2.1

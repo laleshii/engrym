@@ -26,7 +26,8 @@ summary: 'The command surface: index, search, topic, related, show, lint, serve,
   and implies `--all`.
 - `browse` — a local web server (`src/commands/browse.rs`) that renders docs as
   HTML, rewrites `[[wikilinks]]` to links, and shows related / same-altitude /
-  same-topic panels. Server-rendered (no JS); only new dep is `tiny_http`.
+  same-topic panels. Server-rendered; the only script is the light/dark theme
+  toggle. Only new dep is `tiny_http`.
 - `new` / `set` / `rm` — author documents (see [[authoring-commands]]).
 - `lint` — validate the frontmatter contract.
 - `serve` — the warm embedding daemon (see [[warm-daemon]]).
